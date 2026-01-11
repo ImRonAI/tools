@@ -20,13 +20,15 @@ It leverages the Strands SDK's MCPClient for robust connection management
 and implements a per-operation connection pattern for stability.
 """
 
+import json
 import logging
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
-from threading import Lock
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from threading import Lock, Timer
+from typing import Any, Callable, Dict, List, Optional
 
 from mcp import StdioServerParameters, stdio_client
 from mcp.client.sse import sse_client
@@ -39,6 +41,18 @@ logger = logging.getLogger(__name__)
 
 # Default timeout for MCP operations - can be overridden via environment variable
 DEFAULT_MCP_TIMEOUT = float(os.environ.get("STRANDS_MCP_TIMEOUT", "30.0"))
+
+# Config watcher state
+_config_watchers: Dict[str, "ConfigWatcher"] = {}
+_WATCHER_LOCK = Lock()
+
+# Try to import yaml for YAML config support
+try:
+    import yaml
+    YAML_AVAILABLE = True
+except ImportError:
+    YAML_AVAILABLE = False
+    yaml = None
 
 
 class MCPTool(AgentTool):
@@ -257,6 +271,9 @@ def mcp_client(
     sse_read_timeout: Optional[float] = None,
     terminate_on_close: Optional[bool] = None,
     auth: Optional[Any] = None,
+    # Config hot-loading parameters
+    config_path: Optional[str] = None,
+    poll_interval: Optional[float] = None,
     agent: Optional[Any] = None,  # Agent instance passed by SDK
 ) -> Dict[str, Any]:
     """
@@ -265,6 +282,26 @@ def mcp_client(
     ⚠️ SECURITY WARNING: This tool enables agents to autonomously connect to external
     MCP servers and dynamically load remote tools at runtime. This can pose significant
     security risks as agents may connect to malicious servers or execute untrusted code.
+
+    Args:
+        action: The action to perform (connect, list_tools, disconnect, call_tool, list_connections,
+                load_tools, load_from_config, watch_config, stop_watching)
+        server_config: Configuration for MCP server connection (optional, can use direct parameters)
+        connection_id: Identifier for the MCP connection
+        tool_name: Name of tool to call (for call_tool action)
+        tool_args: Arguments to pass to tool (for call_tool action)
+        transport: Transport type (stdio, sse, or streamable_http) - can be passed directly instead of in server_config
+        command: Command for stdio transport - can be passed directly
+        args: Arguments for stdio command - can be passed directly
+        env: Environment variables for stdio command - can be passed directly
+        server_url: URL for SSE or streamable_http transport - can be passed directly
+        arguments: Alternative to tool_args for tool arguments
+        headers: HTTP headers for streamable_http transport (optional)
+        timeout: Timeout in seconds for HTTP operations in streamable_http transport (default: 30)
+        sse_read_timeout: SSE read timeout in seconds for streamable_http transport (default: 300)
+        terminate_on_close: Whether to terminate connection on close for streamable_http transport (default: True)
+        auth: Authentication object for streamable_http transport (httpx.Auth compatible)
+        agent: Agent instance passed by SDK
 
     Key Security Considerations:
     - Agents can connect to ANY MCP server URL or command provided
@@ -283,24 +320,6 @@ def mcp_client(
     - call_tool: Directly invoke a tool on a connected server
     - list_connections: Show all active MCP connections
     - load_tools: Load MCP tools into agent's tool registry for direct access
-
-    Args:
-        action: The action to perform (connect, list_tools, disconnect, call_tool, list_connections)
-        server_config: Configuration for MCP server connection (optional, can use direct parameters)
-        connection_id: Identifier for the MCP connection
-        tool_name: Name of tool to call (for call_tool action)
-        tool_args: Arguments to pass to tool (for call_tool action)
-        transport: Transport type (stdio, sse, or streamable_http) - can be passed directly instead of in server_config
-        command: Command for stdio transport - can be passed directly
-        args: Arguments for stdio command - can be passed directly
-        env: Environment variables for stdio command - can be passed directly
-        server_url: URL for SSE or streamable_http transport - can be passed directly
-        arguments: Alternative to tool_args for tool arguments
-        headers: HTTP headers for streamable_http transport (optional)
-        timeout: Timeout in seconds for HTTP operations in streamable_http transport (default: 30)
-        sse_read_timeout: SSE read timeout in seconds for streamable_http transport (default: 300)
-        terminate_on_close: Whether to terminate connection on close for streamable_http transport (default: True)
-        auth: Authentication object for streamable_http transport (httpx.Auth compatible)
 
     Returns:
         Dict with the result of the operation
@@ -342,6 +361,8 @@ def mcp_client(
             "tool_name": tool_name,
             "tool_args": tool_args or arguments,  # Support both parameter names
             "agent": agent,  # Pass agent instance to handlers
+            "config_path": config_path,  # For hot-loading actions
+            "poll_interval": poll_interval or 2.0,  # Default 2 second poll interval
         }
 
         # Handle server configuration - merge direct parameters with server_config
@@ -414,13 +435,20 @@ def mcp_client(
             return _call_server_tool(params)
         elif action == "load_tools":
             return _load_tools_to_agent(params)
+        elif action == "load_from_config":
+            return _load_from_config(params)
+        elif action == "watch_config":
+            return _watch_config(params)
+        elif action == "stop_watching":
+            return _stop_watching(params)
         else:
             return {
                 "status": "error",
                 "content": [
                     {
                         "text": f"Unknown action: {action}. Available actions: "
-                        "connect, disconnect, list_connections, list_tools, call_tool, load_tools"
+                        "connect, disconnect, list_connections, list_tools, call_tool, load_tools, "
+                        "load_from_config, watch_config, stop_watching"
                     }
                 ],
             }
@@ -719,3 +747,259 @@ def _load_tools_to_agent(params: Dict[str, Any]) -> Dict[str, Any]:
 
     except Exception as e:
         return {"status": "error", "content": [{"text": f"Failed to load tools: {str(e)}"}]}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Config Hot-Loading
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class ConfigWatcher:
+    """Watches a config file for changes and triggers reconnection."""
+
+    config_path: str
+    poll_interval: float = 2.0
+    last_mtime: float = 0.0
+    is_running: bool = False
+    timer: Optional[Timer] = field(default=None, repr=False)
+    on_change_callback: Optional[Callable] = field(default=None, repr=False)
+    agent: Optional[Any] = field(default=None, repr=False)
+
+    def start(self):
+        """Start watching the config file."""
+        self.is_running = True
+        self._check_and_schedule()
+
+    def stop(self):
+        """Stop watching the config file."""
+        self.is_running = False
+        if self.timer:
+            self.timer.cancel()
+            self.timer = None
+
+    def _check_and_schedule(self):
+        """Check for file changes and schedule next check."""
+        if not self.is_running:
+            return
+
+        try:
+            path = Path(self.config_path)
+            if path.exists():
+                current_mtime = path.stat().st_mtime
+                if self.last_mtime > 0 and current_mtime > self.last_mtime:
+                    logger.info(f"Config file changed: {self.config_path}")
+                    if self.on_change_callback:
+                        self.on_change_callback(self.config_path, self.agent)
+                self.last_mtime = current_mtime
+        except Exception as e:
+            logger.error(f"Error checking config file: {e}")
+
+        # Schedule next check
+        self.timer = Timer(self.poll_interval, self._check_and_schedule)
+        self.timer.daemon = True
+        self.timer.start()
+
+
+def _parse_config_file(config_path: str) -> Dict[str, Any]:
+    """Parse a JSON or YAML config file."""
+    path = Path(config_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+
+    content = path.read_text()
+    suffix = path.suffix.lower()
+
+    if suffix in (".yaml", ".yml"):
+        if not YAML_AVAILABLE:
+            raise ImportError("PyYAML is required for YAML config files. Install with: pip install pyyaml")
+        return yaml.safe_load(content)
+    elif suffix == ".json":
+        return json.loads(content)
+    else:
+        # Try JSON first, then YAML
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            if YAML_AVAILABLE:
+                return yaml.safe_load(content)
+            raise ValueError(f"Could not parse config file: {config_path}. Install pyyaml for YAML support.")
+
+
+def _reload_from_config(config_path: str, agent: Optional[Any] = None):
+    """Reload all servers from a config file (used by watcher callback)."""
+    try:
+        config = _parse_config_file(config_path)
+        servers = config.get("mcpServers", {})
+
+        for server_id, server_config in servers.items():
+            # Disconnect existing connection if present
+            existing = _get_connection(server_id)
+            if existing:
+                logger.info(f"Disconnecting existing connection: {server_id}")
+                _disconnect_from_server({"connection_id": server_id, "agent": agent})
+
+            # Reconnect with new config
+            logger.info(f"Reconnecting server: {server_id}")
+            params = {"connection_id": server_id, "agent": agent}
+
+            # Map config to params
+            if "command" in server_config:
+                params["transport"] = "stdio"
+                params["command"] = server_config["command"]
+                params["args"] = server_config.get("args", [])
+                if "env" in server_config:
+                    params["env"] = server_config["env"]
+            elif "url" in server_config or "server_url" in server_config:
+                url = server_config.get("url") or server_config.get("server_url")
+                params["server_url"] = url
+                params["transport"] = server_config.get("transport", "sse")
+
+            result = _connect_to_server(params)
+            if result.get("status") == "success" and agent:
+                _load_tools_to_agent({"connection_id": server_id, "agent": agent})
+
+    except Exception as e:
+        logger.error(f"Error reloading config: {e}", exc_info=True)
+
+
+def _load_from_config(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Load MCP servers from a JSON or YAML config file."""
+    config_path = params.get("config_path")
+    agent = params.get("agent")
+
+    if not config_path:
+        return {"status": "error", "content": [{"text": "config_path is required for load_from_config action"}]}
+
+    try:
+        config = _parse_config_file(config_path)
+        servers = config.get("mcpServers", {})
+
+        if not servers:
+            return {"status": "error", "content": [{"text": f"No mcpServers found in config: {config_path}"}]}
+
+        connected = []
+        failed = []
+
+        for server_id, server_config in servers.items():
+            try:
+                connect_params = {"connection_id": server_id, "agent": agent}
+
+                # Map config to params
+                if "command" in server_config:
+                    connect_params["transport"] = "stdio"
+                    connect_params["command"] = server_config["command"]
+                    connect_params["args"] = server_config.get("args", [])
+                    if "env" in server_config:
+                        connect_params["env"] = server_config["env"]
+                elif "url" in server_config or "server_url" in server_config:
+                    url = server_config.get("url") or server_config.get("server_url")
+                    connect_params["server_url"] = url
+                    connect_params["transport"] = server_config.get("transport", "sse")
+
+                result = _connect_to_server(connect_params)
+                if result.get("status") == "success":
+                    connected.append(server_id)
+                    if agent:
+                        _load_tools_to_agent({"connection_id": server_id, "agent": agent})
+                else:
+                    failed.append({"server": server_id, "error": str(result.get("content", [{}])[0].get("text", "Unknown"))})
+
+            except Exception as e:
+                failed.append({"server": server_id, "error": str(e)})
+
+        load_result = {
+            "config_path": config_path,
+            "connected_servers": connected,
+            "failed_servers": failed,
+            "total_connected": len(connected),
+        }
+
+        return {
+            "status": "success" if connected else "error",
+            "content": [
+                {"text": f"Loaded {len(connected)} servers from config: {config_path}"},
+                {"json": load_result},
+            ],
+        }
+
+    except Exception as e:
+        return {"status": "error", "content": [{"text": f"Failed to load config: {str(e)}"}]}
+
+
+def _watch_config(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Start watching a config file for changes and auto-reload."""
+    config_path = params.get("config_path")
+    agent = params.get("agent")
+    poll_interval = params.get("poll_interval", 2.0)
+
+    if not config_path:
+        return {"status": "error", "content": [{"text": "config_path is required for watch_config action"}]}
+
+    path = Path(config_path)
+    if not path.exists():
+        return {"status": "error", "content": [{"text": f"Config file not found: {config_path}"}]}
+
+    abs_path = str(path.absolute())
+
+    with _WATCHER_LOCK:
+        # Stop existing watcher if any
+        if abs_path in _config_watchers:
+            _config_watchers[abs_path].stop()
+
+        # Create and start new watcher
+        watcher = ConfigWatcher(
+            config_path=abs_path,
+            poll_interval=poll_interval,
+            last_mtime=path.stat().st_mtime,
+            on_change_callback=_reload_from_config,
+            agent=agent,
+        )
+        watcher.start()
+        _config_watchers[abs_path] = watcher
+
+    # Also load the config initially
+    load_result = _load_from_config({"config_path": config_path, "agent": agent})
+
+    watch_result = {
+        "config_path": abs_path,
+        "poll_interval": poll_interval,
+        "status": "watching",
+        "initial_load": load_result.get("content", [{}])[0].get("text", ""),
+    }
+
+    return {
+        "status": "success",
+        "content": [
+            {"text": f"Watching config file: {abs_path} (poll every {poll_interval}s)"},
+            {"json": watch_result},
+        ],
+    }
+
+
+def _stop_watching(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Stop watching a config file."""
+    config_path = params.get("config_path")
+
+    if not config_path:
+        # Stop all watchers
+        with _WATCHER_LOCK:
+            stopped = list(_config_watchers.keys())
+            for watcher in _config_watchers.values():
+                watcher.stop()
+            _config_watchers.clear()
+
+        return {
+            "status": "success",
+            "content": [{"text": f"Stopped watching {len(stopped)} config files"}, {"json": {"stopped": stopped}}],
+        }
+
+    abs_path = str(Path(config_path).absolute())
+
+    with _WATCHER_LOCK:
+        if abs_path in _config_watchers:
+            _config_watchers[abs_path].stop()
+            del _config_watchers[abs_path]
+            return {"status": "success", "content": [{"text": f"Stopped watching: {abs_path}"}]}
+        else:
+            return {"status": "error", "content": [{"text": f"Not watching: {abs_path}"}]}

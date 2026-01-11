@@ -40,6 +40,8 @@ result = agent.tool.shell(command=["task1", "task2"], parallel=True)
 ```
 
 Configuration:
+- SHELL_DEFAULT_TIMEOUT (environment variable): Default timeout for commands in seconds.
+  If not set, defaults to 900 seconds (15 minutes). Override per-command with timeout parameter.
 - STRANDS_NON_INTERACTIVE (environment variable): Set to "true" to run the tool
   in a non-interactive mode, suppressing all user prompts for confirmation.
 - BYPASS_TOOL_CONSENT (environment variable): Set to "true" to bypass only the

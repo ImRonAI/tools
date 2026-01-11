@@ -51,105 +51,8 @@ import hashlib
 import os
 from typing import Any, Dict
 
-from strands.types.tools import ToolResult, ToolUse
+from strands import tool
 from twelvelabs import TwelveLabs
-
-TOOL_SPEC = {
-    "name": "chat_video",
-    "description": """Chat with video content using TwelveLabs' Pegasus model for video understanding.
-
-Key Features:
-1. Video Analysis:
-   - Natural language Q&A about video content
-   - Multi-modal understanding (visual and audio)
-   - Support for various video formats
-   - Automatic video indexing when needed
-
-2. Input Options:
-   - Use existing video_id for indexed videos
-   - Upload new video from file path
-   - Configurable response generation
-   - Choice of analysis modes
-
-3. Response Types:
-   - Detailed descriptions
-   - Question answering
-   - Content summarization
-   - Action identification
-   - Audio transcription
-
-Usage Examples:
-1. Chat with existing video:
-   chat_video(prompt="What are the key points?", video_id="video_123")
-
-2. Upload and chat with new video:
-   chat_video(
-       prompt="Describe the main events",
-       video_path="/path/to/video.mp4",
-       index_id="your-index-id"
-   )
-
-3. Focused analysis:
-   chat_video(
-       prompt="What is being said in the video?",
-       video_id="video_123",
-       engine_options=["audio"]
-   )
-
-4. Creative responses:
-   chat_video(
-       prompt="Write a story based on this video",
-       video_id="video_123",
-       temperature=0.9
-   )
-
-Note: Either video_id OR video_path must be provided, not both.""",
-    "inputSchema": {
-        "json": {
-            "type": "object",
-            "properties": {
-                "prompt": {
-                    "type": "string",
-                    "description": "Natural language question or instruction about the video",
-                },
-                "video_id": {
-                    "type": "string",
-                    "description": "ID of an already indexed video in TwelveLabs",
-                },
-                "video_path": {
-                    "type": "string",
-                    "description": "Path to a video file to upload and analyze",
-                },
-                "index_id": {
-                    "type": "string",
-                    "description": (
-                        "TwelveLabs index ID (required for video uploads). "
-                        "Uses TWELVELABS_PEGASUS_INDEX_ID env var if not provided"
-                    ),
-                },
-                "temperature": {
-                    "type": "number",
-                    "description": "Controls randomness in responses (0.0-1.0). Default: 0.7",
-                    "minimum": 0.0,
-                    "maximum": 1.0,
-                },
-                "engine_options": {
-                    "type": "array",
-                    "items": {
-                        "type": "string",
-                        "enum": ["visual", "audio"],
-                    },
-                    "description": "Analysis modes to use. Default: ['visual', 'audio']",
-                },
-            },
-            "required": ["prompt"],
-            "oneOf": [
-                {"required": ["video_id"]},
-                {"required": ["video_path"]},
-            ],
-        }
-    },
-}
 
 # Cache for uploaded videos to avoid re-uploading
 VIDEO_CACHE: Dict[str, str] = {}
@@ -219,60 +122,49 @@ def upload_and_index_video(video_path: str, index_id: str, api_key: str) -> str:
         return video_id
 
 
-def chat_video(tool: ToolUse, **kwargs: Any) -> ToolResult:
+@tool
+def chat_video(
+    prompt: str,
+    video_id: str = None,
+    video_path: str = None,
+    index_id: str = None,
+    temperature: float = 0.7,
+    engine_options: list[str] = None,
+) -> dict:
     """
-    Chat with video content using TwelveLabs Pegasus model.
+    Chat with video content using TwelveLabs' Pegasus model for video understanding.
 
     This tool enables natural language conversations about video content using
     TwelveLabs' Pegasus model. It can analyze both visual and audio aspects
     of videos to answer questions, provide descriptions, and extract insights.
 
-    How It Works:
-    ------------
-    1. Takes either an existing video_id or uploads a new video from video_path
-    2. Sends your prompt to TwelveLabs' Pegasus model
-    3. The model analyzes the video content (visual and/or audio)
-    4. Returns a natural language response based on the video understanding
-
-    Common Usage Scenarios:
-    ---------------------
-    - Summarizing video content
-    - Answering specific questions about videos
-    - Describing actions and events in videos
-    - Extracting dialogue or audio information
-    - Identifying objects, people, or scenes
-    - Creating video transcripts or captions
+    Key Features:
+    - Natural language Q&A about video content
+    - Multi-modal understanding (visual and audio)
+    - Support for various video formats
+    - Automatic video indexing when needed
+    - Detailed descriptions and question answering
+    - Content summarization and action identification
 
     Args:
-        tool: Tool use information containing input parameters:
-            prompt: Natural language question or instruction
-            video_id: ID of existing indexed video (optional)
-            video_path: Path to video file to upload (optional)
-            index_id: Index ID for uploads (default: from TWELVELABS_PEGASUS_INDEX_ID env)
-            temperature: Response randomness 0.0-1.0 (default: 0.7)
-            engine_options: Analysis modes ['visual', 'audio'] (default: both)
+        prompt: Natural language question or instruction about the video
+        video_id: ID of an already indexed video in TwelveLabs
+        video_path: Path to a video file to upload and analyze
+        index_id: TwelveLabs index ID (required for video uploads). Uses TWELVELABS_PEGASUS_INDEX_ID env var if not provided
+        temperature: Controls randomness in responses (0.0-1.0). Default: 0.7
+        engine_options: Analysis modes to use. Default: ['visual', 'audio']
 
     Returns:
-        Dictionary containing status and Pegasus response:
-        {
-            "toolUseId": "unique_id",
-            "status": "success|error",
-            "content": [{"text": "Pegasus response or error message"}]
-        }
-
-        Success: Returns the model's natural language response
-        Error: Returns information about what went wrong
+        Dictionary containing the Pegasus response with status and content.
 
     Notes:
-        - Requires TWELVELABS_API_KEY environment variable
-        - For video uploads, index_id is required (or set via TWELVELABS_PEGASUS_INDEX_ID env)
-        - Uploaded videos are cached to avoid re-uploading the same file
-        - Visual mode analyzes what's seen in the video
-        - Audio mode analyzes speech and sounds
-        - Using both modes provides the most comprehensive understanding
+        Either video_id OR video_path must be provided, not both.
+        Requires TWELVELABS_API_KEY environment variable.
+        Uploaded videos are cached to avoid re-uploading the same file.
     """
-    tool_use_id = tool["toolUseId"]
-    tool_input = tool["input"]
+    # Set default for engine_options if not provided
+    if engine_options is None:
+        engine_options = ["visual", "audio"]
 
     try:
         # Get API key
@@ -281,13 +173,6 @@ def chat_video(tool: ToolUse, **kwargs: Any) -> ToolResult:
             raise ValueError(
                 "TWELVELABS_API_KEY environment variable not set. Please set it to your TwelveLabs API key."
             )
-
-        # Extract parameters
-        prompt = tool_input["prompt"]
-        video_id = tool_input.get("video_id")
-        video_path = tool_input.get("video_path")
-        temperature = tool_input.get("temperature", 0.7)
-        engine_options = tool_input.get("engine_options", ["visual", "audio"])
 
         # Validate input - must have either video_id or video_path
         if not video_id and not video_path:
@@ -298,7 +183,8 @@ def chat_video(tool: ToolUse, **kwargs: Any) -> ToolResult:
 
         # Handle video upload if video_path is provided
         if video_path:
-            index_id = tool_input.get("index_id") or os.getenv("TWELVELABS_PEGASUS_INDEX_ID")
+            if not index_id:
+                index_id = os.getenv("TWELVELABS_PEGASUS_INDEX_ID")
             if not index_id:
                 raise ValueError(
                     "index_id is required for video uploads. "
@@ -337,14 +223,12 @@ def chat_video(tool: ToolUse, **kwargs: Any) -> ToolResult:
             ]
 
             return {
-                "toolUseId": tool_use_id,
                 "status": "success",
                 "content": [{"text": full_response + "\n".join(metadata_parts)}],
             }
 
     except FileNotFoundError as e:
         return {
-            "toolUseId": tool_use_id,
             "status": "error",
             "content": [{"text": f"File error: {e!s}"}],
         }
@@ -371,7 +255,6 @@ def chat_video(tool: ToolUse, **kwargs: Any) -> ToolResult:
             )
 
         return {
-            "toolUseId": tool_use_id,
             "status": "error",
             "content": [{"text": error_message}],
         }

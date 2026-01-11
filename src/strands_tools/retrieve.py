@@ -65,126 +65,7 @@ from typing import Any, Dict, List
 
 import boto3
 from botocore.config import Config as BotocoreConfig
-from strands.types.tools import ToolResult, ToolUse
-
-TOOL_SPEC = {
-    "name": "retrieve",
-    "description": """Retrieves knowledge based on the provided text from Amazon Bedrock Knowledge Bases.
-
-Key Features:
-1. Semantic Search:
-   - Vector-based similarity matching
-   - Relevance scoring (0.0-1.0)
-   - Score-based filtering
-
-2. Advanced Configuration:
-   - Custom result limits
-   - Score thresholds
-   - Regional support
-   - Multiple knowledge bases
-
-3. Response Format:
-   - Sorted by relevance
-   - Includes metadata
-   - Source tracking
-   - Score visibility
-
-4. Example Response:
-   {
-     "content": {
-       "text": "Document content...",
-       "type": "TEXT"
-     },
-     "location": {
-       "customDocumentLocation": {
-         "id": "document_id"
-       },
-       "type": "CUSTOM"
-     },
-     "metadata": {
-       "x-amz-bedrock-kb-source-uri": "source_uri",
-       "x-amz-bedrock-kb-chunk-id": "chunk_id",
-       "x-amz-bedrock-kb-data-source-id": "data_source_id"
-     },
-     "score": 0.95
-   }
-
-Usage Examples:
-1. Basic search:
-   retrieve(text="What is STRANDS?")
-
-2. With score threshold:
-   retrieve(text="deployment steps", score=0.7)
-
-3. Limited results:
-   retrieve(text="best practices", numberOfResults=3)
-
-4. Custom knowledge base:
-   retrieve(text="query", knowledgeBaseId="custom-kb-id")""",
-    "inputSchema": {
-        "json": {
-            "type": "object",
-            "properties": {
-                "text": {
-                    "type": "string",
-                    "description": "The query to retrieve relevant knowledge.",
-                },
-                "numberOfResults": {
-                    "type": "integer",
-                    "description": "The maximum number of results to return. Default is 5.",
-                },
-                "knowledgeBaseId": {
-                    "type": "string",
-                    "description": "The ID of the knowledge base to retrieve from.",
-                },
-                "region": {
-                    "type": "string",
-                    "description": "The AWS region name. Default is 'us-west-2'.",
-                },
-                "score": {
-                    "type": "number",
-                    "description": (
-                        "Minimum relevance score threshold (0.0-1.0). Results below this score will be filtered out. "
-                        "Default is 0.4."
-                    ),
-                    "default": 0.4,
-                    "minimum": 0.0,
-                    "maximum": 1.0,
-                },
-                "profile_name": {
-                    "type": "string",
-                    "description": (
-                        "Optional: AWS profile name to use from ~/.aws/credentials. Defaults to default profile if not "
-                        "specified."
-                    ),
-                },
-                "enableMetadata": {
-                    "type": "boolean",
-                    "description": (
-                        "Whether to include metadata in the response. When enabled, shows source URI, chunk ID, "
-                        "data source ID, and other document metadata. Default is false."
-                    ),
-                    "default": False,
-                },
-                "retrieveFilter": {
-                    "type": "object",
-                    "description": (
-                        "Optional filter to apply to retrieval results based on metadata attributes in the "
-                        "knowledge base. This is a UNION type - only one operator can be specified at the top level. "
-                        "Available operators: "
-                        "equals (exact match), notEquals, greaterThan, greaterThanOrEquals, lessThan, "
-                        "lessThanOrEquals, in (value in list), notIn, listContains (list contains value), "
-                        "stringContains (substring match), startsWith (OpenSearch Serverless only), "
-                        "andAll (all conditions must match, min 2 items), orAll (at least one condition must match, "
-                        'min 2 items). Example: {"andAll": [{"equals": {"key": "category", '
-                        '"value": "security"}}, {"greaterThan": {"key": "year", "value": "2022"}}]}'
-                    ),
-                },
-            },
-            "required": ["text"],
-        }
-    },
-}
+from strands import tool
 
 
 def filter_results_by_score(results: List[Dict[str, Any]], min_score: float) -> List[Dict[str, Any]]:
@@ -222,7 +103,14 @@ def format_results_for_display(results: List[Dict[str, Any]], enable_metadata: b
         document ID, optional metadata, and content.
     """
     if not results:
-        return "No results found above score threshold."
+        return (
+            "No results found above score threshold.\n"
+            "POSSIBLE CAUSES:\n"
+            "1. Score threshold too high (try lowering 'score' parameter)\n"
+            "2. No documents match the query\n"
+            "3. Knowledge base is empty or not indexed\n"
+            "4. Query terms don't match document content"
+        )
 
     formatted = []
     for result in results:
@@ -252,16 +140,24 @@ def format_results_for_display(results: List[Dict[str, Any]], enable_metadata: b
     return "\n".join(formatted)
 
 
-def retrieve(tool: ToolUse, **kwargs: Any) -> ToolResult:
-    """
-    Retrieve relevant knowledge from Amazon Bedrock Knowledge Base.
+@tool
+def retrieve(
+    text: str,
+    numberOfResults: int = 10,
+    knowledgeBaseId: str = None,
+    region: str = None,
+    score: float = None,
+    profile_name: str = None,
+    enableMetadata: bool = None,
+    retrieveFilter: Dict = None,
+) -> Dict:
+    """Retrieve relevant knowledge from Amazon Bedrock Knowledge Base.
 
     This tool uses Amazon Bedrock Knowledge Bases to perform semantic search against your
     organization's documents. It returns results sorted by relevance score, with the ability
     to filter results that don't meet a minimum score threshold.
 
     How It Works:
-    ------------
     1. The provided query text is sent to Amazon Bedrock Knowledge Base
     2. The service performs vector-based semantic search against indexed documents
     3. Results are returned with relevance scores (0.0-1.0) indicating match quality
@@ -269,7 +165,6 @@ def retrieve(tool: ToolUse, **kwargs: Any) -> ToolResult:
     5. Remaining results are formatted for readability and returned
 
     Common Usage Scenarios:
-    ---------------------
     - Answering user questions from product documentation
     - Finding relevant information in company policies
     - Retrieving context from technical manuals
@@ -277,25 +172,17 @@ def retrieve(tool: ToolUse, **kwargs: Any) -> ToolResult:
     - Looking up information in legal documents
 
     Args:
-        tool: Tool use information containing input parameters:
-            text: The query text to search for in the knowledge base
-            numberOfResults: Maximum number of results to return (default: 10)
-            knowledgeBaseId: The ID of the knowledge base to query (default: from environment)
-            region: AWS region where the knowledge base is located (default: us-west-2)
-            score: Minimum relevance score threshold (default: 0.4)
-            profile_name: Optional AWS profile name to use
-            retrieveFilter: Optional filter to apply to the retrieval results
+        text: The query text to search for in the knowledge base
+        numberOfResults: Maximum number of results to return (default: 10)
+        knowledgeBaseId: The ID of the knowledge base to query (default: from KNOWLEDGE_BASE_ID env)
+        region: AWS region where the knowledge base is located (default: us-west-2 or AWS_REGION env)
+        score: Minimum relevance score threshold (default: 0.4 or MIN_SCORE env)
+        profile_name: Optional AWS profile name to use
+        enableMetadata: Whether to include metadata in the response (default: false or RETRIEVE_ENABLE_METADATA_DEFAULT env)
+        retrieveFilter: Optional filter to apply to the retrieval results
 
     Returns:
-        Dictionary containing status and response content in the format:
-        {
-            "toolUseId": "unique_id",
-            "status": "success|error",
-            "content": [{"text": "Retrieved results or error message"}]
-        }
-
-        Success case: Returns formatted results from the knowledge base
-        Error case: Returns information about what went wrong during retrieval
+        Dictionary containing status and response content
 
     Notes:
         - The knowledge base ID can be set via the KNOWLEDGE_BASE_ID environment variable
@@ -304,75 +191,109 @@ def retrieve(tool: ToolUse, **kwargs: Any) -> ToolResult:
         - Results are automatically filtered based on the minimum score threshold
         - AWS credentials must be configured properly for this tool to work
     """
+    # Handle environment variable defaults
     default_knowledge_base_id = os.getenv("KNOWLEDGE_BASE_ID")
     default_aws_region = os.getenv("AWS_REGION", "us-west-2")
     default_min_score = float(os.getenv("MIN_SCORE", "0.4"))
     default_enable_metadata = os.getenv("RETRIEVE_ENABLE_METADATA_DEFAULT", "false").lower() == "true"
-    tool_use_id = tool["toolUseId"]
-    tool_input = tool["input"]
+
+    # Use defaults if not provided
+    if knowledgeBaseId is None:
+        knowledgeBaseId = default_knowledge_base_id
+    if region is None:
+        region = default_aws_region
+    if score is None:
+        score = default_min_score
+    if enableMetadata is None:
+        enableMetadata = default_enable_metadata
 
     try:
-        # Extract parameters
-        query = tool_input["text"]
-        number_of_results = tool_input.get("numberOfResults", 10)
-        kb_id = tool_input.get("knowledgeBaseId", default_knowledge_base_id)
-        region_name = tool_input.get("region", default_aws_region)
-        min_score = tool_input.get("score", default_min_score)
-        enable_metadata = tool_input.get("enableMetadata", default_enable_metadata)
-        retrieve_filter = tool_input.get("retrieveFilter")
+        # Validate required parameters
+        if not knowledgeBaseId:
+            raise ValueError(
+                "ERROR: knowledgeBaseId is required but not provided.\n"
+                "SOLUTION 1: Set environment variable: export KNOWLEDGE_BASE_ID='your-kb-id'\n"
+                "SOLUTION 2: Pass parameter: retrieve(text='query', knowledgeBaseId='your-kb-id')\n"
+                "NOTE: You can find your Knowledge Base ID in the AWS Bedrock console"
+            )
 
-        # Initialize Bedrock client with optional profile name
-        profile_name = tool_input.get("profile_name")
         config = BotocoreConfig(user_agent_extra="strands-agents-retrieve")
         if profile_name:
             session = boto3.Session(profile_name=profile_name)
             bedrock_agent_runtime_client = session.client(
-                "bedrock-agent-runtime", region_name=region_name, config=config
+                "bedrock-agent-runtime", region_name=region, config=config
             )
         else:
-            bedrock_agent_runtime_client = boto3.client("bedrock-agent-runtime", region_name=region_name, config=config)
+            bedrock_agent_runtime_client = boto3.client("bedrock-agent-runtime", region_name=region, config=config)
 
         # Default retrieval configuration
-        retrieval_config = {"vectorSearchConfiguration": {"numberOfResults": number_of_results}}
+        retrieval_config = {"vectorSearchConfiguration": {"numberOfResults": numberOfResults}}
 
-        if retrieve_filter:
+        if retrieveFilter:
             try:
-                if _validate_filter(retrieve_filter):
-                    retrieval_config["vectorSearchConfiguration"]["filter"] = retrieve_filter
+                if _validate_filter(retrieveFilter):
+                    retrieval_config["vectorSearchConfiguration"]["filter"] = retrieveFilter
             except ValueError as e:
                 return {
-                    "toolUseId": tool_use_id,
                     "status": "error",
                     "content": [{"text": str(e)}],
                 }
 
         # Perform retrieval
         response = bedrock_agent_runtime_client.retrieve(
-            retrievalQuery={"text": query}, knowledgeBaseId=kb_id, retrievalConfiguration=retrieval_config
+            retrievalQuery={"text": text}, knowledgeBaseId=knowledgeBaseId, retrievalConfiguration=retrieval_config
         )
 
         # Get and filter results
         all_results = response.get("retrievalResults", [])
-        filtered_results = filter_results_by_score(all_results, min_score)
+        filtered_results = filter_results_by_score(all_results, score)
 
         # Format results for display with optional metadata
-        formatted_results = format_results_for_display(filtered_results, enable_metadata)
+        formatted_results = format_results_for_display(filtered_results, enableMetadata)
 
         # Return success with formatted results
         return {
-            "toolUseId": tool_use_id,
             "status": "success",
             "content": [
-                {"text": f"Retrieved {len(filtered_results)} results with score >= {min_score}:\n{formatted_results}"}
+                {"text": f"Retrieved {len(filtered_results)} results with score >= {score}:\n{formatted_results}"}
             ],
         }
 
     except Exception as e:
-        # Return error with details
+        # Return error with helpful details
+        error_msg = str(e)
+
+        # Provide specific help for common errors
+        if "NoCredentialsError" in error_msg or "Unable to locate credentials" in error_msg:
+            error_msg = (
+                f"AWS credentials not configured.\n"
+                f"SOLUTION: Configure AWS credentials using one of:\n"
+                f"1. AWS CLI: aws configure\n"
+                f"2. Environment variables: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY\n"
+                f"3. IAM role (if running on AWS)\n"
+                f"Original error: {error_msg}"
+            )
+        elif "AccessDeniedException" in error_msg:
+            error_msg = (
+                f"Access denied to Bedrock Knowledge Base.\n"
+                f"SOLUTION: Ensure your AWS credentials have the required permissions:\n"
+                f"- bedrock:Retrieve permission for the knowledge base\n"
+                f"- Check the knowledge base ID is correct: {knowledgeBaseId}\n"
+                f"Original error: {error_msg}"
+            )
+        elif "ResourceNotFoundException" in error_msg:
+            error_msg = (
+                f"Knowledge Base not found.\n"
+                f"SOLUTION: Verify:\n"
+                f"1. Knowledge Base ID is correct: {knowledgeBaseId}\n"
+                f"2. Region is correct: {region}\n"
+                f"3. Knowledge Base exists and is active\n"
+                f"Original error: {error_msg}"
+            )
+
         return {
-            "toolUseId": tool_use_id,
             "status": "error",
-            "content": [{"text": f"Error during retrieval: {str(e)}"}],
+            "content": [{"text": f"Error during retrieval: {error_msg}"}],
         }
 
 

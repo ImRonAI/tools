@@ -54,39 +54,9 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
-from strands.types.tools import ToolResult, ToolUse
+from strands import tool
 
 from strands_tools.utils import console_util
-
-TOOL_SPEC = {
-    "name": "journal",
-    "description": "Create and manage daily journal entries with tasks and notes",
-    "inputSchema": {
-        "json": {
-            "type": "object",
-            "properties": {
-                "action": {
-                    "type": "string",
-                    "enum": ["write", "read", "list", "add_task"],
-                    "description": "Action to perform (write/read/list/add_task)",
-                },
-                "content": {
-                    "type": "string",
-                    "description": "Content to write (for write action)",
-                },
-                "date": {
-                    "type": "string",
-                    "description": "Date in YYYY-MM-DD format (defaults to today)",
-                },
-                "task": {
-                    "type": "string",
-                    "description": "Task to add (for add_task action)",
-                },
-            },
-            "required": ["action"],
-        }
-    },
-}
 
 
 def ensure_journal_dir() -> Path:
@@ -199,7 +169,13 @@ def create_rich_response(console: Console, action: str, result: Dict[str, Any]) 
         console.print(panel)
 
 
-def journal(tool: ToolUse, **kwargs: Any) -> ToolResult:
+@tool
+def journal(
+    action: str,
+    content: Optional[str] = None,
+    date: Optional[str] = None,
+    task: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Create and manage daily journal entries with tasks and notes.
 
@@ -207,43 +183,14 @@ def journal(tool: ToolUse, **kwargs: Any) -> ToolResult:
     available journal entries. Each journal is stored as a Markdown file in the
     cwd()/journal/ directory, organized by date.
 
-    How It Works:
-    ------------
-    1. Journal entries are stored as Markdown files in the journal directory
-    2. Each file is named with the date format YYYY-MM-DD.md
-    3. Entries within a journal are timestamped with HH:MM:SS
-    4. Tasks are stored with checkbox format (- [ ] task description)
-    5. Rich formatting is applied when displaying journal content
-
-    Journal Actions:
-    --------------
-    - write: Create a new entry in the specified date's journal
-    - read: Display the content of a journal for a specific date
-    - list: Show all available journal entries with stats
-    - add_task: Add a task item to the specified date's journal
-
-    Common Usage Scenarios:
-    ---------------------
-    - Daily note-taking and journaling
-    - Task and todo list management
-    - Progress tracking and reflection
-    - Timestamped logging and record keeping
-
     Args:
-        tool: The tool use object containing input parameters
-            - action: Action to perform (write/read/list/add_task)
-            - content: Content to write (required for write action)
-            - date: Date in YYYY-MM-DD format (defaults to today)
-            - task: Task to add (required for add_task action)
+        action: Action to perform (write/read/list/add_task)
+        content: Content to write (required for write action)
+        date: Date in YYYY-MM-DD format (defaults to today)
+        task: Task to add (required for add_task action)
 
     Returns:
-        ToolResult containing status and response content in the format:
-        {
-            "toolUseId": "<tool_use_id>",
-            "status": "success|error",
-            "content": [{"text": "Response message"}]
-        }
-
+        Dictionary containing status and response content:
         Success case: Returns confirmation of the action performed
         Error case: Returns information about what went wrong
 
@@ -256,18 +203,10 @@ def journal(tool: ToolUse, **kwargs: Any) -> ToolResult:
     """
     console = console_util.create()
 
-    tool_use_id = tool["toolUseId"]
-    tool_input = tool["input"]
-
-    action = tool_input["action"]
-    date = tool_input.get("date")
-
     try:
         if action == "write":
-            content = tool_input.get("content")
             if not content:
                 return {
-                    "toolUseId": tool_use_id,
                     "status": "error",
                     "content": [{"text": "Content is required for write action"}],
                 }
@@ -287,7 +226,6 @@ def journal(tool: ToolUse, **kwargs: Any) -> ToolResult:
 
             create_rich_response(console, action, result)
             return {
-                "toolUseId": tool_use_id,
                 "status": "success",
                 "content": [{"text": f"Added entry to journal: {journal_path}"}],
             }
@@ -296,7 +234,6 @@ def journal(tool: ToolUse, **kwargs: Any) -> ToolResult:
             journal_path = get_journal_path(date)
             if not journal_path.exists():
                 return {
-                    "toolUseId": tool_use_id,
                     "status": "error",
                     "content": [{"text": f"No journal found for date: {journal_path.stem}"}],
                 }
@@ -308,7 +245,6 @@ def journal(tool: ToolUse, **kwargs: Any) -> ToolResult:
 
             create_rich_response(console, action, result)
             return {
-                "toolUseId": tool_use_id,
                 "status": "success",
                 "content": [{"text": content}],
             }
@@ -319,7 +255,6 @@ def journal(tool: ToolUse, **kwargs: Any) -> ToolResult:
 
             if not journals:
                 return {
-                    "toolUseId": tool_use_id,
                     "status": "success",
                     "content": [{"text": "No journal entries found"}],
                 }
@@ -342,16 +277,13 @@ def journal(tool: ToolUse, **kwargs: Any) -> ToolResult:
             create_rich_response(console, action, result)
 
             return {
-                "toolUseId": tool_use_id,
                 "status": "success",
                 "content": [{"text": f"Listed {len(entries)} journal entries"}],
             }
 
         elif action == "add_task":
-            task = tool_input.get("task")
             if not task:
                 return {
-                    "toolUseId": tool_use_id,
                     "status": "error",
                     "content": [{"text": "Task is required for add_task action"}],
                 }
@@ -366,20 +298,17 @@ def journal(tool: ToolUse, **kwargs: Any) -> ToolResult:
 
             create_rich_response(console, action, result)
             return {
-                "toolUseId": tool_use_id,
                 "status": "success",
                 "content": [{"text": f"Added task to journal: {journal_path}"}],
             }
 
         return {
-            "toolUseId": tool_use_id,
             "status": "error",
             "content": [{"text": f"Unknown action: {action}"}],
         }
 
     except Exception as e:
         return {
-            "toolUseId": tool_use_id,
             "status": "error",
             "content": [{"text": f"Error: {str(e)}"}],
         }

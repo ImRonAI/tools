@@ -8,7 +8,7 @@ Example usage:
     import os
     import sys
 
-    from strands import Agent
+    from strands import Agent, tool
     from strands_tools import batch, http_request, use_aws
 
     # Example usage of the batch with http_request and use_aws tools
@@ -31,70 +31,44 @@ Example usage:
 """
 
 import traceback
+from typing import Any, Dict, List
 
-from strands.types.tools import ToolResult, ToolUse
+from strands import tool, ToolContext
 
 from strands_tools.utils import console_util
 
-TOOL_SPEC = {
-    "name": "batch",
-    "description": "Invoke multiple other tool calls simultaneously",
-    "inputSchema": {
-        "json": {
-            "type": "object",
-            "properties": {
-                "invocations": {
-                    "type": "array",
-                    "description": "The tool calls to invoke",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "name": {"type": "string", "description": "The name of the tool to invoke"},
-                            "arguments": {"type": "object", "description": "The arguments to the tool"},
-                        },
-                        "required": ["name", "arguments"],
-                    },
-                }
-            },
-            "required": ["invocations"],
-        }
-    },
-}
 
-
-def batch(tool: ToolUse, **kwargs) -> ToolResult:
+@tool(context=True)
+def batch(invocations: List[Dict[str, Any]], tool_context: ToolContext) -> dict:
     """
-    Batch tool for invoking multiple tools in parallel.
+    Invoke multiple other tool calls simultaneously.
+
+    This tool enables invoking multiple other tools in parallel from a single LLM message response.
+    It is designed for use with agents that support tool registration and invocation by name.
 
     Args:
-        tool: Tool use object.
-        **kwargs: Additional arguments passed by the framework, including 'agent' and 'invocations'.
+        invocations: The tool calls to invoke, each containing 'name' and 'arguments'
+        tool_context: Context containing the agent instance for tool invocation
 
     Returns:
-        ToolResult with toolUseId, status and a list of results for each invocation.
+        Dictionary with batch execution summary and separated results:
+        - batch_status: "success" (all succeeded), "partial_success" (some failed), or "failed" (all failed)
+        - successful_results: List of successful tool invocations with their results
+        - failed_results: List of failed tool invocations with error details
+        - all_results: Complete list of all results in original order
+
+    Error Handling:
+        Individual tool failures do not stop the batch execution.
+        Each tool is executed independently, and errors are captured per-tool.
+        The response clearly separates successful and failed invocations for easy identification.
 
     Notes:
-        - Each invocation should specify the tool name and its arguments.
-        - The tool will attempt to call each specified tool function with the provided arguments.
-        - If a tool function is not found or an error occurs, it will be captured in the results.
-        - This tool is designed to work with agents that support dynamic tool invocation.
-
-    Sample output:
-        {
-            "status": "success",
-            "results": [
-                {"name": "http_request", "status": "success", "result": {...}},
-                {"name": "use_aws", "status": "error", "error": "...", "traceback": "..."},
-                ...
-            ]
-        }
+        Each invocation should specify the tool name and its arguments.
+        The tool will attempt to call each specified tool function with the provided arguments.
+        If a tool function is not found or an error occurs, it will be captured in the results.
     """
     console = console_util.create()
-    tool_use_id = tool["toolUseId"]
-
-    # Retrieve 'agent' and 'invocations' from kwargs
-    agent = kwargs.get("agent")
-    invocations = kwargs.get("invocations", [])
+    agent = tool_context.agent
     results = []
 
     try:
@@ -133,31 +107,48 @@ def batch(tool: ToolUse, **kwargs) -> ToolResult:
                 batch_result = {"name": tool_name, "status": "error", "error": error_msg}
                 results.append(batch_result)
 
+        # Separate successful and failed results for clarity
+        successful_results = [r for r in results if r["status"] == "success"]
+        failed_results = [r for r in results if r["status"] == "error"]
+
+        # Determine overall batch status
+        batch_status = "success" if len(failed_results) == 0 else "partial_success" if len(successful_results) > 0 else "failed"
+
         # Create a readable summary for the agent
         summary_lines = []
-        summary_lines.append(f"Batch execution completed with {len(results)} tool(s):")
+        summary_lines.append(f"Batch execution completed: {len(successful_results)}/{len(results)} succeeded")
 
-        for result in results:
-            if result["status"] == "success":
-                summary_lines.append(f"✓ {result['name']}: Success")
-            else:
-                summary_lines.append(f"✗ {result['name']}: Error - {result['error']}")
+        if successful_results:
+            summary_lines.append("\n✅ Successful:")
+            for result in successful_results:
+                summary_lines.append(f"  • {result['name']}")
+
+        if failed_results:
+            summary_lines.append("\n❌ Failed:")
+            for result in failed_results:
+                error_msg = result['error']
+                # Truncate long error messages for readability
+                if len(error_msg) > 100:
+                    error_msg = error_msg[:97] + "..."
+                summary_lines.append(f"  • {result['name']}: {error_msg}")
 
         summary_text = "\n".join(summary_lines)
 
         return {
-            "toolUseId": tool_use_id,
-            "status": "success",
+            "status": batch_status,
             "content": [
                 {"text": summary_text},
                 {
                     "json": {
                         "batch_summary": {
                             "total_tools": len(results),
-                            "successful": len([r for r in results if r["status"] == "success"]),
-                            "failed": len([r for r in results if r["status"] == "error"]),
+                            "successful": len(successful_results),
+                            "failed": len(failed_results),
+                            "batch_status": batch_status
                         },
-                        "results": results,
+                        "successful_results": successful_results,
+                        "failed_results": failed_results,
+                        "all_results": results,
                     }
                 },
             ],
@@ -167,7 +158,6 @@ def batch(tool: ToolUse, **kwargs) -> ToolResult:
         error_msg = f"Error in batch tool: {str(e)}\n{traceback.format_exc()}"
         console.print(f"Error in batch tool: {str(e)}")
         return {
-            "toolUseId": tool_use_id,
             "status": "error",
             "content": [{"text": error_msg}],
         }

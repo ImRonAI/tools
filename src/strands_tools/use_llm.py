@@ -43,46 +43,23 @@ See the use_llm function docstring for more details on configuration options and
 """
 
 import logging
-from typing import Any
+from typing import Any, List, Optional
 
-from strands import Agent
+from strands import Agent, tool
 from strands.telemetry.metrics import metrics_to_string
-from strands.types.tools import ToolResult, ToolUse
 
 logger = logging.getLogger(__name__)
 
-TOOL_SPEC = {
-    "name": "use_llm",
-    "description": "Start a new AI event loop with a specified prompt",
-    "inputSchema": {
-        "json": {
-            "type": "object",
-            "properties": {
-                "prompt": {
-                    "type": "string",
-                    "description": "What should this AI event loop do?",
-                },
-                "system_prompt": {
-                    "type": "string",
-                    "description": "System prompt for the new event loop",
-                },
-                "tools": {
-                    "type": "array",
-                    "description": "List of tool names to make available to the nested agent"
-                    + "Tool names must exist in the parent agent's tool registry."
-                    + "If not provided, inherits all tools from parent agent.",
-                    "items": {"type": "string"},
-                },
-            },
-            "required": ["prompt", "system_prompt"],
-        }
-    },
-}
 
-
-def use_llm(tool: ToolUse, **kwargs: Any) -> ToolResult:
+@tool
+def use_llm(
+    prompt: str,
+    system_prompt: str,
+    tools: Optional[List[str]] = None,
+    agent: Optional[Any] = None
+) -> dict:
     """
-    Create a new LLM instance using the Agent interface.
+    Start a new AI event loop with a specified prompt.
 
     This function creates a new Strands Agent instance with the provided system prompt,
     runs it with the specified prompt, and returns the response with performance metrics.
@@ -111,67 +88,45 @@ def use_llm(tool: ToolUse, **kwargs: Any) -> ToolResult:
     - Learning and reasoning: Using nested agents for complex reasoning chains
 
     Args:
-        tool (ToolUse): Tool use object containing the following:
-            - prompt (str): The prompt to process with the new agent instance
-            - system_prompt (str): Custom system prompt for the agent
-            - tools (List[str], optional): List of tool names to make available to the nested agent.
-                Tool names must exist in the parent agent's tool registry.
-                Examples: ["calculator", "file_read", "retrieve"]
-                If not provided, inherits all tools from the parent agent.
-        **kwargs (Any): Additional keyword arguments
+        prompt: What should this AI event loop do?
+        system_prompt: System prompt for the new event loop
+        tools: List of tool names to make available to the nested agent.
+            Tool names must exist in the parent agent's tool registry.
+            If not provided, inherits all tools from parent agent.
+        agent: Parent agent (automatically passed by Strands framework)
 
     Returns:
-        ToolResult: Dictionary containing status and response content in the format:
-        {
-            "toolUseId": "unique-tool-use-id",
-            "status": "success",
-            "content": [
-                {"text": "Response: The response text from the agent"},
-                {"text": "Metrics: Performance metrics information"}
-            ]
-        }
+        Dictionary containing status and response content
 
     Notes:
         - The agent instance is temporary and will be garbage-collected after use
         - The agent(prompt) call is synchronous and will block until completion
         - Performance metrics include token usage and processing latency information
     """
-    tool_use_id = tool["toolUseId"]
-    tool_input = tool["input"]
-
     logger.warning(
         "DEPRECATION WARNING: use_llm will be removed in the next major release. "
         "Migration path: replace use_llm calls with use_agent for equivalent functionality."
     )
 
-    prompt = tool_input["prompt"]
-    tool_system_prompt = tool_input.get("system_prompt")
-    specified_tools = tool_input.get("tools")
-
-    tools = []
+    filtered_tools = []
     trace_attributes = {}
 
     extra_kwargs = {}
-    parent_agent = kwargs.get("agent")
+    parent_agent = agent
     if parent_agent:
         trace_attributes = parent_agent.trace_attributes
         extra_kwargs["callback_handler"] = parent_agent.callback_handler
 
         # If specific tools are provided, filter parent tools; otherwise inherit all tools from parent
-        if specified_tools is not None:
+        if tools is not None:
             # Filter parent agent tools to only include specified tool names
-            filtered_tools = []
-            for tool_name in specified_tools:
+            for tool_name in tools:
                 if tool_name in parent_agent.tool_registry.registry:
                     filtered_tools.append(parent_agent.tool_registry.registry[tool_name])
                 else:
                     logger.warning(f"Tool '{tool_name}' not found in parent agent's tool registry")
-            tools = filtered_tools
         else:
-            tools = list(parent_agent.tool_registry.registry.values())
-
-    if "callback_handler" in kwargs:
-        extra_kwargs["callback_handler"] = kwargs["callback_handler"]
+            filtered_tools = list(parent_agent.tool_registry.registry.values())
 
     # Display input prompt
     logger.debug(f"\n--- Input Prompt ---\n{prompt}\n")
@@ -180,15 +135,15 @@ def use_llm(tool: ToolUse, **kwargs: Any) -> ToolResult:
     logger.debug("🔄 Creating new LLM instance...")
 
     # Initialize the new Agent with provided parameters
-    agent = Agent(
+    new_agent = Agent(
         messages=[],
-        tools=tools,
-        system_prompt=tool_system_prompt,
+        tools=filtered_tools,
+        system_prompt=system_prompt,
         trace_attributes=trace_attributes,
         **extra_kwargs,
     )
     # Run the agent with the provided prompt
-    result = agent(prompt)
+    result = new_agent(prompt)
 
     # Extract response
     assistant_response = str(result)
@@ -204,7 +159,6 @@ def use_llm(tool: ToolUse, **kwargs: Any) -> ToolResult:
         logger.debug(metrics_text)
 
     return {
-        "toolUseId": tool_use_id,
         "status": "success",
         "content": [
             {"text": f"Response: {assistant_response}"},

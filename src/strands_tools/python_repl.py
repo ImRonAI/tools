@@ -55,61 +55,13 @@ from rich import box
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
-from strands.types.tools import ToolResult, ToolUse
+from strands import tool
 
 from strands_tools.utils import console_util
 from strands_tools.utils.user_input import get_user_input
 
 # Initialize logging and set paths
 logger = logging.getLogger(__name__)
-
-# Tool specification
-TOOL_SPEC = {
-    "name": "python_repl",
-    "description": "Execute Python code in a REPL environment with interactive PTY support and state persistence.\n\n"
-    "IMPORTANT SAFETY FEATURES:\n"
-    "1. User Confirmation: Requires explicit approval before executing code\n"
-    "2. Code Preview: Shows syntax-highlighted code before execution\n"
-    "3. State Management: Maintains variables between executions, default controlled by PYTHON_REPL_RESET_STATE\n"
-    "4. Error Handling: Captures and formats errors with suggestions\n"
-    "5. Development Mode: Can bypass confirmation in BYPASS_TOOL_CONSENT environments\n"
-    "6. Interactive Control: Can enable/disable interactive PTY mode in PYTHON_REPL_INTERACTIVE environments\n\n"
-    "Key Features:\n"
-    "- Persistent state between executions\n"
-    "- Interactive PTY support for real-time feedback\n"
-    "- Output capturing and formatting\n"
-    "- Error handling and logging\n"
-    "- State reset capabilities\n\n"
-    "Example Usage:\n"
-    "1. Basic execution: code=\"print('Hello, world!')\"\n"
-    '2. With state: First call code="x = 10", then code="print(x * 2)"\n'
-    "3. Reset state: code=\"print('Fresh start')\", reset_state=True",
-    "inputSchema": {
-        "json": {
-            "type": "object",
-            "properties": {
-                "code": {"type": "string", "description": "The Python code to execute"},
-                "interactive": {
-                    "type": "boolean",
-                    "description": (
-                        "Whether to enable interactive PTY mode. "
-                        "Default controlled by PYTHON_REPL_INTERACTIVE environment variable."
-                    ),
-                    "default": True,
-                },
-                "reset_state": {
-                    "type": "boolean",
-                    "description": (
-                        "Whether to reset the REPL state before execution. "
-                        "Default controlled by PYTHON_REPL_RESET_STATE environment variable."
-                    ),
-                    "default": False,
-                },
-            },
-            "required": ["code"],
-        }
-    },
-}
 
 
 class OutputCapture:
@@ -563,16 +515,42 @@ class PtyManager:
 output_buffer: List[str] = []
 
 
-def python_repl(tool: ToolUse, **kwargs: Any) -> ToolResult:
-    """Execute Python code with persistent state and output streaming."""
+@tool
+def python_repl(
+    code: str,
+    interactive: Optional[bool] = None,
+    reset_state: Optional[bool] = None,
+    **kwargs: Any
+) -> Dict:
+    """Execute Python code in a REPL environment with interactive PTY support and state persistence.
+
+    This tool provides a powerful Python REPL environment with features like persistent state between executions,
+    interactive PTY support for real-time feedback, output capturing and formatting, error handling and logging,
+    and state reset capabilities.
+
+    IMPORTANT SAFETY FEATURES:
+    1. User Confirmation: Requires explicit approval before executing code
+    2. Code Preview: Shows syntax-highlighted code before execution
+    3. State Management: Maintains variables between executions
+    4. Error Handling: Captures and formats errors with suggestions
+    5. Development Mode: Can bypass confirmation in BYPASS_TOOL_CONSENT environments
+
+    Args:
+        code: The Python code to execute
+        interactive: Whether to enable interactive PTY mode (default controlled by PYTHON_REPL_INTERACTIVE env var, defaults to True)
+        reset_state: Whether to reset the REPL state before execution (default controlled by PYTHON_REPL_RESET_STATE env var, defaults to False)
+        **kwargs: Additional keyword arguments
+
+    Returns:
+        Dictionary containing execution status and output
+    """
     console = console_util.create()
 
-    tool_use_id = tool["toolUseId"]
-    tool_input = tool["input"]
-
-    code = tool_input["code"]
-    interactive = os.environ.get("PYTHON_REPL_INTERACTIVE", str(tool_input.get("interactive", True))).lower() == "true"
-    reset_state = os.environ.get("PYTHON_REPL_RESET_STATE", str(tool_input.get("reset_state", False))).lower() == "true"
+    # Handle environment variable defaults
+    if interactive is None:
+        interactive = os.environ.get("PYTHON_REPL_INTERACTIVE", "true").lower() == "true"
+    if reset_state is None:
+        reset_state = os.environ.get("PYTHON_REPL_RESET_STATE", "false").lower() == "true"
 
     # Check for development mode
     strands_dev = os.environ.get("BYPASS_TOOL_CONSENT", "").lower() == "true"
@@ -637,7 +615,6 @@ def python_repl(tool: ToolUse, **kwargs: Any) -> ToolResult:
                 )
                 console.print(error_panel)
                 return {
-                    "toolUseId": tool_use_id,
                     "status": "error",
                     "content": [{"text": error_message}],
                 }
@@ -692,7 +669,6 @@ def python_repl(tool: ToolUse, **kwargs: Any) -> ToolResult:
 
             # Return result with output
             return {
-                "toolUseId": tool_use_id,
                 "status": "success",
                 "content": [{"text": output if output else "Code executed successfully"}],
             }
@@ -732,7 +708,6 @@ def python_repl(tool: ToolUse, **kwargs: Any) -> ToolResult:
             suggestion = "\nTo fix this, try running with reset_state=True"
 
         return {
-            "toolUseId": tool_use_id,
             "status": "error",
             "content": [{"text": f"{error_msg}{suggestion}"}],
         }

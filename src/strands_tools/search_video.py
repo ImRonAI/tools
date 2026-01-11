@@ -50,113 +50,9 @@ See the search_video function docstring for more details on available parameters
 import os
 from typing import Any, List
 
-from strands.types.tools import ToolResult, ToolUse
+from strands import tool
 from twelvelabs import TwelveLabs
 from twelvelabs.models.search import SearchData
-
-TOOL_SPEC = {
-    "name": "search_video",
-    "description": """Searches video content using TwelveLabs' semantic search capabilities.
-
-Key Features:
-1. Semantic Search:
-   - Natural language queries against video content
-   - Multi-modal search (visual and audio)
-   - Relevance scoring (0.0-1.0)
-   - Confidence-based filtering
-   
-2. Advanced Configuration:
-   - Group results by video or clip
-   - Set confidence thresholds
-   - Control result limits
-   - Choose search modalities
-
-3. Response Format:
-   - Sorted by relevance score
-   - Includes timestamps
-   - Video IDs for reference
-   - Confidence levels
-
-4. Example Response:
-   When grouped by clip:
-   {
-     "score": 0.85,
-     "start": 120.5,
-     "end": 145.3,
-     "confidence": "high",
-     "video_id": "video_123"
-   }
-   
-   When grouped by video:
-   {
-     "video_id": "video_123",
-     "clips": [
-       {"score": 0.85, "start": 120.5, "end": 145.3, "confidence": "high"},
-       {"score": 0.72, "start": 200.0, "end": 215.7, "confidence": "medium"}
-     ]
-   }
-
-Usage Examples:
-1. Basic search:
-   search_video(query="people discussing technology")
-
-2. Search specific index:
-   search_video(query="product features", index_id="your-index-id")
-
-3. High confidence results only:
-   search_video(query="keynote presentation", threshold="high")
-
-4. Group by video:
-   search_video(query="tutorial steps", group_by="video")
-
-5. Audio-only search:
-   search_video(query="mentioned pricing", search_options=["audio"])""",
-    "inputSchema": {
-        "json": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Natural language search query for video content",
-                },
-                "index_id": {
-                    "type": "string",
-                    "description": (
-                        "TwelveLabs index ID to search. Uses TWELVELABS_MARENGO_INDEX_ID env var if not provided"
-                    ),
-                },
-                "search_options": {
-                    "type": "array",
-                    "items": {
-                        "type": "string",
-                        "enum": ["visual", "audio"],
-                    },
-                    "description": "Search modalities to use. Default: ['visual', 'audio']",
-                },
-                "group_by": {
-                    "type": "string",
-                    "enum": ["video", "clip"],
-                    "description": (
-                        "How to group results. 'clip' returns individual segments, "
-                        "'video' groups clips by video. Default: 'clip'"
-                    ),
-                },
-                "threshold": {
-                    "type": "string",
-                    "enum": ["high", "medium", "low", "none"],
-                    "description": "Minimum confidence threshold for results. Default: 'medium'",
-                },
-                "page_limit": {
-                    "type": "integer",
-                    "description": "Maximum number of results to return. Default: 10",
-                    "minimum": 1,
-                    "maximum": 100,
-                },
-            },
-            "required": ["query"],
-        }
-    },
-}
 
 
 def format_search_results(results: List[SearchData], group_by: str, total_count: int) -> str:
@@ -201,7 +97,15 @@ def format_search_results(results: List[SearchData], group_by: str, total_count:
     return "\n".join(formatted)
 
 
-def search_video(tool: ToolUse, **kwargs: Any) -> ToolResult:
+@tool
+def search_video(
+    query: str,
+    index_id: str = None,
+    search_options: List[str] = None,
+    group_by: str = "clip",
+    threshold: str = "medium",
+    page_limit: int = 10
+) -> dict:
     """
     Search video content using TwelveLabs semantic search.
 
@@ -226,24 +130,15 @@ def search_video(tool: ToolUse, **kwargs: Any) -> ToolResult:
     - Finding spoken keywords in podcasts or interviews
 
     Args:
-        tool: Tool use information containing input parameters:
-            query: Natural language search query
-            index_id: TwelveLabs index to search (default: from TWELVELABS_MARENGO_INDEX_ID env var)
-            search_options: Modalities to search ['visual', 'audio'] (default: both)
-            group_by: Group results by 'clip' or 'video' (default: 'clip')
-            threshold: Confidence threshold 'high', 'medium', 'low', 'none' (default: 'medium')
-            page_limit: Maximum results to return (default: 10)
+        query: Natural language search query for video content
+        index_id: TwelveLabs index ID to search. Uses TWELVELABS_MARENGO_INDEX_ID env var if not provided
+        search_options: Search modalities to use. Default: ['visual', 'audio']
+        group_by: How to group results. 'clip' returns individual segments, 'video' groups clips by video. Default: 'clip'
+        threshold: Minimum confidence threshold for results. Options: 'high', 'medium', 'low', 'none'. Default: 'medium'
+        page_limit: Maximum number of results to return. Default: 10
 
     Returns:
-        Dictionary containing status and search results:
-        {
-            "toolUseId": "unique_id",
-            "status": "success|error",
-            "content": [{"text": "Search results or error message"}]
-        }
-
-        Success: Returns formatted video search results with scores and timestamps
-        Error: Returns information about what went wrong
+        Dictionary containing status and search results
 
     Notes:
         - Requires TWELVELABS_API_KEY environment variable
@@ -252,8 +147,6 @@ def search_video(tool: ToolUse, **kwargs: Any) -> ToolResult:
         - Audio search finds spoken words and sounds
         - Results are sorted by relevance score
     """
-    tool_use_id = tool["toolUseId"]
-    tool_input = tool["input"]
 
     try:
         # Get API key
@@ -263,20 +156,17 @@ def search_video(tool: ToolUse, **kwargs: Any) -> ToolResult:
                 "TWELVELABS_API_KEY environment variable not set. Please set it to your TwelveLabs API key."
             )
 
-        # Extract parameters
-        query = tool_input["query"]
-        index_id = tool_input.get("index_id") or os.getenv("TWELVELABS_MARENGO_INDEX_ID")
-
+        # Handle defaults
         if not index_id:
-            raise ValueError(
-                "No index_id provided and TWELVELABS_MARENGO_INDEX_ID environment variable not set. "
-                "Please provide an index_id or set the environment variable."
-            )
+            index_id = os.getenv("TWELVELABS_MARENGO_INDEX_ID")
+            if not index_id:
+                raise ValueError(
+                    "No index_id provided and TWELVELABS_MARENGO_INDEX_ID environment variable not set. "
+                    "Please provide an index_id or set the environment variable."
+                )
 
-        search_options = tool_input.get("search_options", ["visual", "audio"])
-        group_by = tool_input.get("group_by", "clip")
-        threshold = tool_input.get("threshold", "medium")
-        page_limit = tool_input.get("page_limit", 10)
+        if search_options is None:
+            search_options = ["visual", "audio"]
 
         # Initialize TwelveLabs client and perform search
         with TwelveLabs(api_key) as client:
@@ -309,7 +199,6 @@ def search_video(tool: ToolUse, **kwargs: Any) -> ToolResult:
             ]
 
             return {
-                "toolUseId": tool_use_id,
                 "status": "success",
                 "content": [{"text": "\n".join(summary_parts)}],
             }
@@ -326,7 +215,6 @@ def search_video(tool: ToolUse, **kwargs: Any) -> ToolResult:
             error_message += "\n\nAPI rate limit exceeded. Please try again later."
 
         return {
-            "toolUseId": tool_use_id,
             "status": "error",
             "content": [{"text": error_message}],
         }

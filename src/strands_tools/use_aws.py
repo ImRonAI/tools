@@ -57,7 +57,7 @@ from botocore.response import StreamingBody
 from rich import box
 from rich.panel import Panel
 from rich.table import Table
-from strands.types.tools import ToolResult, ToolUse
+from strands import tool
 
 from strands_tools.utils import console_util
 from strands_tools.utils.data_util import convert_datetime_to_str
@@ -168,67 +168,22 @@ def get_available_operations(service_name: str) -> List[str]:
         return []
 
 
-TOOL_SPEC = {
-    "name": "use_aws",
-    "description": (
-        "Make a boto3 client call with the specified service, operation, and parameters. "
-        "Boto3 operations are snake_case."
-    ),
-    "inputSchema": {
-        "json": {
-            "type": "object",
-            "properties": {
-                "service_name": {
-                    "type": "string",
-                    "description": "The name of the AWS service",
-                },
-                "operation_name": {
-                    "type": "string",
-                    "description": "The name of the operation to perform",
-                },
-                "parameters": {
-                    "type": "object",
-                    "description": "The parameters for the operation",
-                },
-                "region": {
-                    "type": "string",
-                    "description": "Region name for calling the operation on AWS boto3",
-                },
-                "label": {
-                    "type": "string",
-                    "description": (
-                        "Label of AWS API operations human readable explanation. "
-                        "This is useful for communicating with human."
-                    ),
-                },
-                "profile_name": {
-                    "type": "string",
-                    "description": (
-                        "Optional: AWS profile name to use from ~/.aws/credentials. "
-                        "Defaults to default profile if not specified."
-                    ),
-                },
-            },
-            "required": [
-                "region",
-                "service_name",
-                "operation_name",
-                "parameters",
-                "label",
-            ],
-        }
-    },
-}
-
-
-def use_aws(tool: ToolUse, **kwargs: Any) -> ToolResult:
+@tool
+def use_aws(
+    service_name: str,
+    operation_name: str,
+    parameters: dict,
+    region: str,
+    label: str,
+    profile_name: Optional[str] = None
+) -> dict:
     """
     Execute AWS service operations using boto3 with comprehensive error handling and validation.
 
     This tool provides a universal interface to AWS services, allowing you to execute
     any operation supported by boto3. It handles authentication, parameter validation,
     response formatting, and provides helpful error messages with schema recommendations
-    when invalid parameters are provided.
+    when invalid parameters are provided. Boto3 operations are snake_case.
 
     How It Works:
     ------------
@@ -248,22 +203,15 @@ def use_aws(tool: ToolUse, **kwargs: Any) -> ToolResult:
     - Security Operations: Manage IAM roles, policies or security settings
 
     Args:
-        tool: The ToolUse object containing:
-            - toolUseId: Unique identifier for this tool invocation
-            - input: Dictionary containing:
-                - service_name: AWS service name (e.g., 's3', 'ec2', 'dynamodb')
-                - operation_name: Operation to perform in snake_case (e.g., 'list_buckets')
-                - parameters: Dictionary of parameters for the operation
-                - region: AWS region (e.g., 'us-west-2')
-                - label: Human-readable description of the operation
-                - profile_name: Optional AWS profile name for credentials
-        **kwargs: Additional keyword arguments (unused)
+        service_name: The name of the AWS service (e.g., 's3', 'ec2', 'dynamodb')
+        operation_name: The name of the operation to perform in snake_case (e.g., 'list_buckets')
+        parameters: The parameters for the operation as a dictionary
+        region: Region name for calling the operation on AWS boto3 (e.g., 'us-west-2')
+        label: Label of AWS API operations human readable explanation. This is useful for communicating with human.
+        profile_name: Optional AWS profile name to use from ~/.aws/credentials. Defaults to default profile if not specified.
 
     Returns:
-        ToolResult dictionary with:
-        - toolUseId: Same ID from the request
-        - status: 'success' or 'error'
-        - content: List of content dictionaries with response text
+        Dictionary containing status and response content
 
     Notes:
         - Mutative operations (create, delete, etc.) require user confirmation in non-dev environments
@@ -274,15 +222,6 @@ def use_aws(tool: ToolUse, **kwargs: Any) -> ToolResult:
     """
     aws_region = os.environ.get("AWS_REGION", "us-west-2")
     console = console_util.create()
-
-    tool_use_id = tool["toolUseId"]
-    tool_input = tool["input"]
-
-    service_name = tool_input["service_name"]
-    operation_name = tool_input["operation_name"]
-    parameters = tool_input["parameters"]
-    region = tool_input.get("region", aws_region)
-    label = tool_input.get("label", "AWS Operation Details")
 
     STRANDS_BYPASS_TOOL_CONSENT = os.environ.get("BYPASS_TOOL_CONSENT", "").lower() == "true"
 
@@ -319,7 +258,6 @@ def use_aws(tool: ToolUse, **kwargs: Any) -> ToolResult:
         )
         if confirm.lower() != "y":
             return {
-                "toolUseId": tool_use_id,
                 "status": "error",
                 "content": [{"text": f"Operation canceled by user. Reason: {confirm}."}],
             }
@@ -329,7 +267,6 @@ def use_aws(tool: ToolUse, **kwargs: Any) -> ToolResult:
     if service_name not in available_services:
         logger.debug(f"Invalid AWS service: {service_name}")
         return {
-            "toolUseId": tool_use_id,
             "status": "error",
             "content": [
                 {"text": f"Invalid AWS service: {service_name}\nAvailable services: {str(available_services)}"}
@@ -341,7 +278,6 @@ def use_aws(tool: ToolUse, **kwargs: Any) -> ToolResult:
     if operation_name not in available_operations:
         logger.debug(f"Invalid AWS operation: {operation_name}")
         return {
-            "toolUseId": tool_use_id,
             "status": "error",
             "content": [
                 {"text": f"Invalid AWS operation: {operation_name}, Available operations:\n{available_operations}\n"}
@@ -349,7 +285,6 @@ def use_aws(tool: ToolUse, **kwargs: Any) -> ToolResult:
         }
 
     # Set up the boto3 client
-    profile_name = tool_input.get("profile_name")
     client = get_boto3_client(service_name, region, profile_name)
     operation_method = getattr(client, operation_name)
 
@@ -359,7 +294,6 @@ def use_aws(tool: ToolUse, **kwargs: Any) -> ToolResult:
         response = convert_datetime_to_str(response)
 
         return {
-            "toolUseId": tool_use_id,
             "status": "success",
             "content": [{"text": f"Success: {str(response)}"}],
         }
@@ -368,7 +302,6 @@ def use_aws(tool: ToolUse, **kwargs: Any) -> ToolResult:
         try:
             schema = generate_input_schema(service_name, operation_name)
             return {
-                "toolUseId": tool_use_id,
                 "status": "error",
                 "content": [
                     {"text": f"Validation error: {str(val_ex)}"},
@@ -379,14 +312,12 @@ def use_aws(tool: ToolUse, **kwargs: Any) -> ToolResult:
         except Exception as schema_ex:
             logger.error(f"Failed to generate schema: {str(schema_ex)}")
             return {
-                "toolUseId": tool_use_id,
                 "status": "error",
                 "content": [{"text": f"Validation error: {str(val_ex)}"}],
             }
     except Exception as ex:
         logger.warning(f"AWS call threw exception: {type(ex).__name__}")
         return {
-            "toolUseId": tool_use_id,
             "status": "error",
             "content": [{"text": f"AWS call threw exception: {str(ex)}"}],
         }

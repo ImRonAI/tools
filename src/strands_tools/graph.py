@@ -1,8 +1,18 @@
 """Graph tool using new Strands SDK Graph implementation.
 
+**GRAPH PATTERN**: Structured agent flowchart with conditional transitions.
+Agents are nodes, edges define possible paths, LLM decides which path to take at each node.
+For task-based DAGs use Workflow tool, for autonomous collaboration use Swarm tool.
+
 This module provides functionality to create and manage multi-agent systems
 using the new Strands SDK Graph implementation. Unlike the old message-passing approach,
 this uses deterministic DAG execution with output propagation.
+
+Key Distinctions from Other Patterns:
+-------------------------------------
+• **Graph (this tool)**: Agent nodes with edges, supports cycles, LLM chooses from defined paths
+• **Workflow tool**: Task DAG without agents, deterministic parallel execution, no cycles
+• **Swarm tool**: No pre-defined structure, agents autonomously decide handoffs
 
 Usage with Strands Agent:
 

@@ -12,7 +12,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.tree import Tree
-from strands.types.tools import ToolResult, ToolUse
+from strands import tool
 
 from strands_tools.use_llm import use_llm
 from strands_tools.utils import console_util
@@ -24,140 +24,6 @@ logger = logging.getLogger(__name__)
 MAX_THREADS = 10
 MESSAGE_PROCESSING_DELAY = 0.1  # seconds
 MAX_QUEUE_SIZE = 1000
-
-TOOL_SPEC = {
-    "name": "agent_graph",
-    "description": """Create and manage graphs of agents with different topologies and communication patterns.
-
-Key Features:
-1. Multiple topology support (star, mesh, hierarchical)
-2. Dynamic message routing
-3. Parallel agent execution
-4. Real-time status monitoring
-5. Flexible agent configuration
-
-Example Usage:
-
-1. Create a new agent graph:
-{
-    "action": "create",
-    "graph_id": "analysis_graph",
-    "topology": {
-        "type": "star",
-        "nodes": [
-            {
-                "id": "central",
-                "role": "coordinator",
-                "system_prompt": "You are the central coordinator."
-            },
-            {
-                "id": "agent1",
-                "role": "analyzer",
-                "system_prompt": "You are a data analyzer."
-            }
-        ],
-        "edges": [
-            {"from": "central", "to": "agent1"}
-        ]
-    }
-}
-
-2. Send a message:
-{
-    "action": "message",
-    "graph_id": "analysis_graph",
-    "message": {
-        "target": "agent1",
-        "content": "Analyze this data pattern..."
-    }
-}
-
-3. Check graph status:
-{
-    "action": "status",
-    "graph_id": "analysis_graph"
-}
-
-4. List all graphs:
-{
-    "action": "list"
-}
-
-5. Stop a graph:
-{
-    "action": "stop",
-    "graph_id": "analysis_graph"
-}
-
-Topology Types:
-- star: Central node with radiating connections
-- mesh: All nodes connected to each other
-- hierarchical: Tree-like structure with parent-child relationships
-
-Node Configuration:
-- id: Unique identifier for the node
-- role: Function/purpose of the agent
-- system_prompt: Agent's system instructions""",
-    "inputSchema": {
-        "json": {
-            "type": "object",
-            "properties": {
-                "action": {
-                    "type": "string",
-                    "enum": ["create", "list", "stop", "message", "status"],
-                    "description": "Action to perform with the agent graph",
-                },
-                "graph_id": {
-                    "type": "string",
-                    "description": "Unique identifier for the agent graph",
-                },
-                "topology": {
-                    "type": "object",
-                    "description": "Graph topology definition with type, nodes, and edges",
-                    "properties": {
-                        "type": {
-                            "type": "string",
-                            "enum": ["star", "mesh", "hierarchical"],
-                            "description": "Type of graph topology",
-                        },
-                        "nodes": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "id": {"type": "string"},
-                                    "role": {"type": "string"},
-                                    "system_prompt": {"type": "string"},
-                                },
-                            },
-                            "description": "List of agent nodes",
-                        },
-                        "edges": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "from": {"type": "string"},
-                                    "to": {"type": "string"},
-                                },
-                            },
-                            "description": "List of connections between nodes",
-                        },
-                    },
-                },
-                "message": {
-                    "type": "object",
-                    "properties": {
-                        "target": {"type": "string", "description": "Target node ID"},
-                        "content": {"type": "string", "description": "Message content"},
-                    },
-                    "description": "Message to send to the graph",
-                },
-            },
-            "required": ["action"],
-        }
-    },
-}
 
 
 def create_rich_table(console: Console, title: str, headers: List[str], rows: List[List[str]]) -> str:
@@ -252,7 +118,6 @@ class AgentNode:
                         # Process message with LLM
                         result = use_llm(
                             {
-                                "toolUseId": str(uuid.uuid4()),
                                 "input": {
                                     "system_prompt": self.system_prompt,
                                     "prompt": message["content"],
@@ -500,14 +365,31 @@ def get_manager(tool_context: Dict[str, Any]) -> AgentGraphManager:
         return _MANAGER
 
 
-def agent_graph(tool: ToolUse, **kwargs: Any) -> ToolResult:
-    """
-    Create and manage graphs of AI agents.
+@tool
+def agent_graph(
+    action: str,
+    graph_id: str = None,
+    topology: Dict[str, Any] = None,
+    message: Dict[str, Any] = None,
+    **kwargs: Any
+) -> Dict[str, Any]:
+    """Create and manage graphs of agents with different topologies and communication patterns.
+
+    Key Features:
+    1. Multiple topology support (star, mesh, hierarchical)
+    2. Dynamic message routing
+    3. Parallel agent execution
+    4. Real-time status monitoring
+    5. Flexible agent configuration
+
+    Args:
+        action: Action to perform - "create", "list", "stop", "message", or "status"
+        graph_id: Unique identifier for the agent graph
+        topology: Graph topology definition with type, nodes, and edges
+        message: Message to send to the graph with target and content fields
     """
     console = console_util.create()
 
-    tool_use_id = tool.get("toolUseId", str(uuid.uuid4()))
-    tool_input = tool.get("input", {})
     bedrock_client = kwargs.get("bedrock_client")
     system_prompt = kwargs.get("system_prompt")
     inference_config = kwargs.get("inference_config")
@@ -532,22 +414,19 @@ def agent_graph(tool: ToolUse, **kwargs: Any) -> ToolResult:
         # Get manager instance thread-safely
         manager = get_manager(tool_context)
 
-        action = tool_input.get("action")
-
         if action == "create":
-            if "graph_id" not in tool_input or "topology" not in tool_input:
+            if not graph_id or not topology:
                 return {
-                    "toolUseId": tool_use_id,
                     "status": "error",
                     "content": [{"text": "graph_id and topology are required for create action"}],
                 }
 
-            result = manager.create_graph(tool_input["graph_id"], tool_input["topology"])
+            result = manager.create_graph(graph_id, topology)
             if result["status"] == "success":
                 panel_content = (
-                    f"✅ {result['message']}\n\n[bold blue]Graph ID:[/bold blue] {tool_input['graph_id']}\n"
-                    f"[bold blue]Topology:[/bold blue] {tool_input['topology']['type']}\n"
-                    f"[bold blue]Nodes:[/bold blue] {len(tool_input['topology']['nodes'])}"
+                    f"✅ {result['message']}\n\n[bold blue]Graph ID:[/bold blue] {graph_id}\n"
+                    f"[bold blue]Topology:[/bold blue] {topology['type']}\n"
+                    f"[bold blue]Nodes:[/bold blue] {len(topology['nodes'])}"
                 )
                 panel = Panel(panel_content, title="Graph Created", box=ROUNDED)
                 with console.capture() as capture:
@@ -555,14 +434,13 @@ def agent_graph(tool: ToolUse, **kwargs: Any) -> ToolResult:
                 result["rich_output"] = capture.get()
 
         elif action == "stop":
-            if "graph_id" not in tool_input:
+            if not graph_id:
                 return {
-                    "toolUseId": tool_use_id,
                     "status": "error",
                     "content": [{"text": "graph_id is required for stop action"}],
                 }
 
-            result = manager.stop_graph(tool_input["graph_id"])
+            result = manager.stop_graph(graph_id)
             if result["status"] == "success":
                 panel_content = f"🛑 {result['message']}"
                 panel = Panel(panel_content, title="Graph Stopped", box=ROUNDED)
@@ -571,19 +449,18 @@ def agent_graph(tool: ToolUse, **kwargs: Any) -> ToolResult:
                 result["rich_output"] = capture.get()
 
         elif action == "message":
-            if "graph_id" not in tool_input or "message" not in tool_input:
+            if not graph_id or not message:
                 return {
-                    "toolUseId": tool_use_id,
                     "status": "error",
                     "content": [{"text": "graph_id and message are required for message action"}],
                 }
 
-            result = manager.send_message(tool_input["graph_id"], tool_input["message"])
+            result = manager.send_message(graph_id, message)
             if result["status"] == "success":
                 panel_content = (
                     f"📨 {result['message']}\n\n"
-                    f"[bold blue]To:[/bold blue] {tool_input['message']['target']}\n"
-                    f"[bold blue]Content:[/bold blue] {tool_input['message']['content'][:100]}..."
+                    f"[bold blue]To:[/bold blue] {message['target']}\n"
+                    f"[bold blue]Content:[/bold blue] {message['content'][:100]}..."
                 )
                 panel = Panel(panel_content, title="Message Sent", box=ROUNDED)
                 with console.capture() as capture:
@@ -591,14 +468,13 @@ def agent_graph(tool: ToolUse, **kwargs: Any) -> ToolResult:
                 result["rich_output"] = capture.get()
 
         elif action == "status":
-            if "graph_id" not in tool_input:
+            if not graph_id:
                 return {
-                    "toolUseId": tool_use_id,
                     "status": "error",
                     "content": [{"text": "graph_id is required for status action"}],
                 }
 
-            result = manager.get_graph_status(tool_input["graph_id"])
+            result = manager.get_graph_status(graph_id)
             if result["status"] == "success":
                 result["rich_output"] = create_rich_status_panel(console, result["data"])
 
@@ -611,7 +487,6 @@ def agent_graph(tool: ToolUse, **kwargs: Any) -> ToolResult:
 
         else:
             return {
-                "toolUseId": tool_use_id,
                 "status": "error",
                 "content": [{"text": f"Unknown action: {action}"}],
             }
@@ -623,16 +498,16 @@ def agent_graph(tool: ToolUse, **kwargs: Any) -> ToolResult:
                 clean_message = f"Operation {action} completed successfully."
                 if action == "create":
                     clean_message = (
-                        f"Graph {tool_input['graph_id']} created with {len(tool_input['topology']['nodes'])} nodes."
+                        f"Graph {graph_id} created with {len(topology['nodes'])} nodes."
                     )
                 elif action == "stop":
-                    clean_message = f"Graph {tool_input['graph_id']} stopped and removed."
+                    clean_message = f"Graph {graph_id} stopped and removed."
                 elif action == "message":
                     clean_message = (
-                        f"Message sent to {tool_input['message']['target']} in graph {tool_input['graph_id']}."
+                        f"Message sent to {message['target']} in graph {graph_id}."
                     )
                 elif action == "status":
-                    clean_message = f"Graph {tool_input['graph_id']} status retrieved."
+                    clean_message = f"Graph {graph_id} status retrieved."
                 elif action == "list":
                     graph_count = len(result["data"])
                     clean_message = f"Listed {graph_count} active agent graphs."
@@ -642,12 +517,11 @@ def agent_graph(tool: ToolUse, **kwargs: Any) -> ToolResult:
             # Store only clean text in content for agent.messages
             content = [{"text": clean_message}]
 
-            return {"toolUseId": tool_use_id, "status": "success", "content": content}
+            return {"status": "success", "content": content}
         else:
             error_message = f"❌ Error: {result['message']}"
             logger.error(error_message)
             return {
-                "toolUseId": tool_use_id,
                 "status": "error",
                 "content": [{"text": error_message}],
             }
@@ -657,7 +531,6 @@ def agent_graph(tool: ToolUse, **kwargs: Any) -> ToolResult:
         error_msg = f"Error: {str(e)}\n\nTraceback:\n{error_trace}"
         logger.error(f"\n[AGENT GRAPH TOOL ERROR]\n{error_msg}")
         return {
-            "toolUseId": tool_use_id,
             "status": "error",
             "content": [{"text": f"⚠️ Agent Graph Error: {str(e)}"}],
         }

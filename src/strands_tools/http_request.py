@@ -2,7 +2,52 @@
 Make HTTP requests with comprehensive authentication, session management, and metrics.
 Supports all major authentication types and enterprise patterns.
 
+Common Usage Patterns:
+=====================
+# Simple GET request
+http_request(method="GET", url="https://api.example.com/data")
+
+# POST with JSON data
+http_request(
+    method="POST",
+    url="https://api.example.com/users",
+    json_data={"name": "John", "email": "john@example.com"}
+)
+
+# GitHub API with token auth
+http_request(
+    method="GET",
+    url="https://api.github.com/user/repos",
+    auth_type="token",
+    auth_env_var="GITHUB_TOKEN"  # Reads from environment
+)
+
+# Basic authentication
+http_request(
+    method="GET",
+    url="https://api.example.com/protected",
+    auth_type="basic",
+    basic_auth={"username": "user", "password": "pass"}
+)
+
+# AWS S3 with SigV4
+http_request(
+    method="GET",
+    url="https://mybucket.s3.amazonaws.com/file.txt",
+    auth_type="aws_sig_v4",
+    aws_auth={"service": "s3", "region": "us-east-1"}
+)
+
+# Custom headers and timeout
+http_request(
+    method="GET",
+    url="https://api.example.com/data",
+    headers={"X-API-Key": "secret", "Accept": "application/json"},
+    timeout=30
+)
+
 Environment Variable Support:
+============================
 1. Authentication tokens:
    - Uses auth_env_var parameter to read tokens from environment (e.g., GITHUB_TOKEN, GITLAB_TOKEN)
    - Example: http_request(method="GET", url="...", auth_type="token", auth_env_var="GITHUB_TOKEN")
@@ -35,162 +80,11 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
-from strands.types.tools import (
-    ToolResult,
-    ToolUse,
-)
+from strands import tool
 from urllib3 import Retry
 
 from strands_tools.utils import console_util
 from strands_tools.utils.user_input import get_user_input
-
-TOOL_SPEC = {
-    "name": "http_request",
-    "description": (
-        "Make HTTP requests to any API with comprehensive authentication including Bearer tokens, Basic auth, "
-        "JWT, AWS SigV4, Digest auth, and enterprise authentication patterns. Automatically reads tokens from "
-        "environment variables (GITHUB_TOKEN, GITLAB_TOKEN, AWS credentials, etc.) when auth_env_var is specified. "
-        "Use environment(action='list') to view available variables. Includes session management, metrics, "
-        "streaming support, cookie handling, redirect control, proxy support, and optional HTML to markdown conversion."
-    ),
-    "inputSchema": {
-        "json": {
-            "type": "object",
-            "properties": {
-                "method": {
-                    "type": "string",
-                    "description": "HTTP method (GET, POST, PUT, DELETE, etc.)",
-                },
-                "url": {
-                    "type": "string",
-                    "description": "The URL to send the request to",
-                },
-                "auth_type": {
-                    "type": "string",
-                    "enum": [
-                        "Bearer",
-                        "token",
-                        "basic",
-                        "digest",
-                        "jwt",
-                        "aws_sig_v4",
-                        "kerberos",
-                        "custom",
-                        "api_key",
-                    ],
-                    "description": "Authentication type to use",
-                },
-                "auth_token": {
-                    "type": "string",
-                    "description": "Authentication token (if not provided, will check environment variables)",
-                },
-                "auth_env_var": {
-                    "type": "string",
-                    "description": "Name of environment variable containing the auth token",
-                },
-                "headers": {
-                    "type": "object",
-                    "description": "HTTP headers as key-value pairs",
-                },
-                "body": {
-                    "type": "string",
-                    "description": "Request body (for POST, PUT, etc.)",
-                },
-                "verify_ssl": {
-                    "type": "boolean",
-                    "description": "Whether to verify SSL certificates",
-                },
-                "cookie": {
-                    "type": "string",
-                    "description": "Path to cookie file to use for the request",
-                },
-                "cookie_jar": {
-                    "type": "string",
-                    "description": "Path to cookie jar file to save cookies to",
-                },
-                "session_config": {
-                    "type": "object",
-                    "description": "Session configuration (cookies, keep-alive, etc)",
-                    "properties": {
-                        "keep_alive": {"type": "boolean"},
-                        "max_retries": {"type": "integer"},
-                        "pool_size": {"type": "integer"},
-                        "cookie_persistence": {"type": "boolean"},
-                    },
-                },
-                "metrics": {
-                    "type": "boolean",
-                    "description": "Whether to collect request metrics",
-                },
-                "streaming": {
-                    "type": "boolean",
-                    "description": "Enable streaming response handling",
-                },
-                "allow_redirects": {
-                    "type": "boolean",
-                    "description": "Whether to follow redirects (default: True)",
-                },
-                "max_redirects": {
-                    "type": "integer",
-                    "description": "Maximum number of redirects to follow (default: 30)",
-                },
-                "convert_to_markdown": {
-                    "type": "boolean",
-                    "description": "Convert HTML responses to markdown format (default: False).",
-                },
-                "aws_auth": {
-                    "type": "object",
-                    "description": "AWS auth configuration for SigV4",
-                    "properties": {
-                        "service": {"type": "string"},
-                        "region": {"type": "string"},
-                        "access_key": {"type": "string"},
-                        "secret_key": {"type": "string"},
-                        "session_token": {"type": "string"},
-                        "refresh_credentials": {"type": "boolean"},
-                    },
-                },
-                "basic_auth": {
-                    "type": "object",
-                    "description": "Basic auth credentials",
-                    "properties": {
-                        "username": {"type": "string"},
-                        "password": {"type": "string"},
-                    },
-                    "required": ["username", "password"],
-                },
-                "digest_auth": {
-                    "type": "object",
-                    "description": "Digest auth credentials",
-                    "properties": {
-                        "username": {"type": "string"},
-                        "password": {"type": "string"},
-                        "realm": {"type": "string"},
-                    },
-                },
-                "jwt_config": {
-                    "type": "object",
-                    "description": "JWT configuration",
-                    "properties": {
-                        "secret": {"type": "string"},
-                        "algorithm": {"type": "string"},
-                        "expiry": {"type": "integer"},
-                    },
-                },
-                "proxies": {
-                    "type": "object",
-                    "description": "Dictionary mapping protocol or protocol and hostname to the URL of the proxy.",
-                    "properties": {
-                        "http": {"type": "string"},
-                        "https": {"type": "string"},
-                        "ftp": {"type": "string"},
-                    },
-                },
-            },
-            "required": ["method", "url"],
-        }
-    },
-}
 
 # Session cache keyed by domain
 SESSION_CACHE = {}
@@ -547,9 +441,60 @@ def format_response_preview(
     )
 
 
-def http_request(tool: ToolUse, **kwargs: Any) -> ToolResult:
+@tool
+def http_request(
+    method: str,
+    url: str,
+    auth_type: Optional[str] = None,
+    auth_token: Optional[str] = None,
+    auth_env_var: Optional[str] = None,
+    headers: Optional[Dict[str, Any]] = None,
+    body: Optional[str] = None,
+    verify_ssl: bool = True,
+    cookie: Optional[str] = None,
+    cookie_jar: Optional[str] = None,
+    session_config: Optional[Dict[str, Any]] = None,
+    metrics: bool = False,
+    streaming: bool = False,
+    allow_redirects: bool = True,
+    max_redirects: Optional[int] = None,
+    convert_to_markdown: bool = False,
+    aws_auth: Optional[Dict[str, Any]] = None,
+    basic_auth: Optional[Dict[str, Any]] = None,
+    digest_auth: Optional[Dict[str, Any]] = None,
+    jwt_config: Optional[Dict[str, Any]] = None,
+    proxies: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """
-    Execute HTTP request with comprehensive authentication and features.
+    Make HTTP requests with comprehensive authentication, session management, and metrics.
+
+    Supports all major authentication types and enterprise patterns. Automatically reads tokens from
+    environment variables (GITHUB_TOKEN, GITLAB_TOKEN, AWS credentials, etc.) when auth_env_var is specified.
+    Use environment(action='list') to view available variables. Includes session management, metrics,
+    streaming support, cookie handling, redirect control, proxy support, and optional HTML to markdown conversion.
+
+    Args:
+        method: HTTP method (GET, POST, PUT, DELETE, etc.)
+        url: The URL to send the request to
+        auth_type: Authentication type to use (Bearer, token, basic, digest, jwt, aws_sig_v4, kerberos, custom, api_key)
+        auth_token: Authentication token (if not provided, will check environment variables)
+        auth_env_var: Name of environment variable containing the auth token
+        headers: HTTP headers as key-value pairs
+        body: Request body (for POST, PUT, etc.)
+        verify_ssl: Whether to verify SSL certificates
+        cookie: Path to cookie file to use for the request
+        cookie_jar: Path to cookie jar file to save cookies to
+        session_config: Session configuration (cookies, keep-alive, etc)
+        metrics: Whether to collect request metrics
+        streaming: Enable streaming response handling
+        allow_redirects: Whether to follow redirects (default: True)
+        max_redirects: Maximum number of redirects to follow (default: 30)
+        convert_to_markdown: Convert HTML responses to markdown format (default: False)
+        aws_auth: AWS auth configuration for SigV4
+        basic_auth: Basic auth credentials
+        digest_auth: Digest auth credentials
+        jwt_config: JWT configuration
+        proxies: Dictionary mapping protocol or protocol and hostname to the URL of the proxy
 
     Common API Examples:
 
@@ -629,23 +574,33 @@ def http_request(tool: ToolUse, **kwargs: Any) -> ToolResult:
     console = console_util.create()
 
     try:
-        # Extract input from tool use object or use directly if already a dict
-        tool_input = {}
-        tool_use_id = "default_id"
+        # Build tool_input dict for compatibility with existing helper functions
+        tool_input = {
+            "method": method,
+            "url": url,
+            "auth_type": auth_type,
+            "auth_token": auth_token,
+            "auth_env_var": auth_env_var,
+            "headers": headers,
+            "body": body,
+            "verify_ssl": verify_ssl,
+            "cookie": cookie,
+            "cookie_jar": cookie_jar,
+            "session_config": session_config,
+            "metrics": metrics,
+            "streaming": streaming,
+            "allow_redirects": allow_redirects,
+            "max_redirects": max_redirects,
+            "convert_to_markdown": convert_to_markdown,
+            "aws_auth": aws_auth,
+            "basic_auth": basic_auth,
+            "digest_auth": digest_auth,
+            "jwt_config": jwt_config,
+            "proxies": proxies,
+        }
 
-        if isinstance(tool, dict):
-            if "input" in tool:
-                tool_input = tool["input"]
-                tool_use_id = tool.get("toolUseId", "default_id")
-            # No else here - tool_input has already been initialized
-
-        method = tool_input["method"]
-        url = tool_input["url"]
-        headers = process_auth_headers(tool_input.get("headers", {}), tool_input)
-        body = tool_input.get("body")
-        verify = tool_input.get("verify_ssl", True)
-        cookie = tool_input.get("cookie")
-        cookie_jar = tool_input.get("cookie_jar")
+        headers = process_auth_headers(headers or {}, tool_input)
+        verify = verify_ssl
 
         # Preview request before execution
         preview_panel = format_request_preview(method, url, headers, body)
@@ -721,7 +676,6 @@ def http_request(tool: ToolUse, **kwargs: Any) -> ToolResult:
                 console.print(error_panel)
                 # Return error status for cancellation to ensure test passes
                 return {
-                    "toolUseId": tool_use_id,
                     "status": "error",
                     "content": [{"text": error_message}],
                 }
@@ -917,7 +871,6 @@ def http_request(tool: ToolUse, **kwargs: Any) -> ToolResult:
             result_text.append(f"Metrics: {metrics}")
 
         return {
-            "toolUseId": tool_use_id,
             "status": "success",
             "content": [{"text": text} for text in result_text],
         }
@@ -948,7 +901,6 @@ def http_request(tool: ToolUse, **kwargs: Any) -> ToolResult:
             error_text = f"ImportError: {str(e)}{suggestion}"
 
         return {
-            "toolUseId": tool_use_id,
             "status": "error",
             "content": [{"text": error_text}],
         }

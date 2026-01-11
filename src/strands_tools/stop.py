@@ -31,29 +31,15 @@ which signals the Strands runtime to terminate the current cycle cleanly.
 import logging
 from typing import Any
 
-from strands.types.tools import ToolResult, ToolUse
+from strands import tool
+from strands.types.tools import ToolContext
 
 # Initialize logging and set paths
 logger = logging.getLogger(__name__)
 
-TOOL_SPEC = {
-    "name": "stop",
-    "description": "Stops the current event loop cycle by setting stop_event_loop flag",
-    "inputSchema": {
-        "json": {
-            "type": "object",
-            "properties": {
-                "reason": {
-                    "type": "string",
-                    "description": "Optional reason for stopping the event loop cycle",
-                }
-            },
-        }
-    },
-}
 
-
-def stop(tool: ToolUse, **kwargs: Any) -> ToolResult:
+@tool(context=True)
+def stop(reason: str = "No reason provided", tool_context: ToolContext = None) -> dict:
     """
     Stops the current event loop cycle by setting the stop_event_loop flag.
 
@@ -77,18 +63,11 @@ def stop(tool: ToolUse, **kwargs: Any) -> ToolResult:
     - Resource management: Stop processing to prevent excessive computation
 
     Args:
-        tool: The tool use object containing the tool input parameters
-            - reason: Optional string explaining why the event loop is being stopped
-        **kwargs: Additional keyword arguments
-            - request_state: Dictionary containing the current request state
+        reason: Optional reason for stopping the event loop cycle. Default: "No reason provided"
+        tool_context: Tool context containing request state
 
     Returns:
-        Dict containing status and response content in the format:
-        {
-            "toolUseId": "<tool_use_id>",
-            "status": "success",
-            "content": [{"text": "Event loop cycle stop requested. Reason: <reason>"}]
-        }
+        Dict containing status and response content
 
     Notes:
         - This tool only stops the current event loop cycle, not the entire application
@@ -96,20 +75,14 @@ def stop(tool: ToolUse, **kwargs: Any) -> ToolResult:
         - Always provide a meaningful reason for debugging and user feedback
         - The stop flag is only effective within the current request context
     """
-    tool_use_id = tool["toolUseId"]
-    tool_input = tool["input"]
-    request_state = kwargs.get("request_state", {})
+    request_state = tool_context.invocation_state.get("request_state", {}) if tool_context else {}
 
     # Set the stop flag
     request_state["stop_event_loop"] = True
 
-    # Get optional reason
-    reason = tool_input.get("reason", "No reason provided")
-
     logger.debug(f"Reason: {reason}")
 
     return {
-        "toolUseId": tool_use_id,
         "status": "success",
         "content": [{"text": f"Event loop cycle stop requested. Reason: {reason}"}],
     }

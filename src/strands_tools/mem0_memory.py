@@ -65,6 +65,13 @@ agent.tool.mem0_memory(
 ```
 """
 
+# CRITICAL: Load environment variables BEFORE any imports that read them
+# This fixes the timing issue where MEM0_API_KEY is set in .env but not
+# available when Mem0ServiceClient initializes at module import time
+from pathlib import Path
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).parents[4] / ".env")  # Load from project root
+
 import json
 import logging
 import os
@@ -78,72 +85,14 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
-from strands.types.tools import ToolResult, ToolResultContent, ToolUse
+from strands import tool
+from strands.types.tools import ToolResult, ToolResultContent
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
 # Initialize Rich console
 console = Console()
-
-TOOL_SPEC = {
-    "name": "mem0_memory",
-    "description": (
-        "Memory management tool for storing, retrieving, and managing memories in Mem0.\n\n"
-        "Features:\n"
-        "1. Store memories with metadata (requires user_id or agent_id)\n"
-        "2. Retrieve memories by ID or semantic search (requires user_id or agent_id)\n"
-        "3. List all memories for a user/agent (requires user_id or agent_id)\n"
-        "4. Delete memories\n"
-        "5. Get memory history\n\n"
-        "Actions:\n"
-        "- store: Store new memory (requires user_id or agent_id)\n"
-        "- get: Get memory by ID\n"
-        "- list: List all memories (requires user_id or agent_id)\n"
-        "- retrieve: Semantic search (requires user_id or agent_id)\n"
-        "- delete: Delete memory\n"
-        "- history: Get memory history\n\n"
-        "Note: Most operations require either user_id or agent_id to be specified. The tool will automatically "
-        "attempt to retrieve relevant memories when user_id or agent_id is available."
-    ),
-    "inputSchema": {
-        "json": {
-            "type": "object",
-            "properties": {
-                "action": {
-                    "type": "string",
-                    "description": ("Action to perform (store, get, list, retrieve, delete, history)"),
-                    "enum": ["store", "get", "list", "retrieve", "delete", "history"],
-                },
-                "content": {
-                    "type": "string",
-                    "description": "Content to store (required for store action)",
-                },
-                "memory_id": {
-                    "type": "string",
-                    "description": "Memory ID (required for get, delete, history actions)",
-                },
-                "query": {
-                    "type": "string",
-                    "description": "Search query (required for retrieve action)",
-                },
-                "user_id": {
-                    "type": "string",
-                    "description": "User ID for the memory operations (required for store, list, retrieve actions)",
-                },
-                "agent_id": {
-                    "type": "string",
-                    "description": "Agent ID for the memory operations (required for store, list, retrieve actions)",
-                },
-                "metadata": {
-                    "type": "object",
-                    "description": "Optional metadata to store with the memory",
-                },
-            },
-            "required": ["action"],
-        }
-    },
-}
 
 
 class Mem0ServiceClient:
@@ -157,7 +106,7 @@ class Mem0ServiceClient:
         "llm": {
             "provider": os.environ.get("MEM0_LLM_PROVIDER", "aws_bedrock"),
             "config": {
-                "model": os.environ.get("MEM0_LLM_MODEL", "anthropic.claude-3-5-haiku-20241022-v1:0"),
+                "model": os.environ.get("MEM0_LLM_MODEL", "anthropic.claude-haiku-4-5-20251001-v1:0"),
                 "temperature": float(os.environ.get("MEM0_LLM_TEMPERATURE", 0.1)),
                 "max_tokens": int(os.environ.get("MEM0_LLM_MAX_TOKENS", 2000)),
             },
@@ -268,43 +217,68 @@ class Mem0ServiceClient:
     def _append_opensearch_config(self, config: Optional[Dict] = None) -> Dict:
         """Update incoming configuration dictionary to include the configuration of OpenSearch vector backend.
 
+        Supports two modes:
+        1. Local Docker mode (OPENSEARCH_LOCAL=true): No SSL, no auth, port 9200
+        2. AWS OpenSearch mode (default): SSL, IAM auth, port 443
+
         Args:
             config: Optional configuration dictionary to override defaults.
 
         Returns:
             An initialized Mem0Memory instance configured for OpenSearch.
         """
-        # Add vector portion of the config
         config = config or {}
-        config["vector_store"] = {
-            "provider": "opensearch",
-            "config": {
-                "port": 443,
-                "collection_name": os.environ.get("OPENSEARCH_COLLECTION", "mem0"),
-                "host": os.environ.get("OPENSEARCH_HOST"),
-                "embedding_model_dims": 1024,
-                "connection_class": RequestsHttpConnection,
-                "pool_maxsize": 20,
-                "use_ssl": True,
-                "verify_certs": True,
-            },
-        }
+        is_local = os.environ.get("OPENSEARCH_LOCAL", "").lower() == "true"
+        
+        if is_local:
+            # Local Docker OpenSearch config (no security plugin)
+            logger.debug("Using LOCAL OpenSearch configuration (no SSL, no auth)")
+            config["vector_store"] = {
+                "provider": "opensearch",
+                "config": {
+                    "host": os.environ.get("OPENSEARCH_HOST", "localhost"),
+                    "port": int(os.environ.get("OPENSEARCH_PORT", "9200")),
+                    "collection_name": os.environ.get("OPENSEARCH_COLLECTION", "mem0"),
+                    "embedding_model_dims": 1024,
+                    "use_ssl": False,
+                    "verify_certs": False,
+                    "connection_class": RequestsHttpConnection,
+                    "pool_maxsize": 20,
+                },
+            }
+            return self._merge_config(config)
+        else:
+            # AWS OpenSearch Serverless config (with IAM auth)
+            logger.debug("Using AWS OpenSearch configuration (SSL, IAM auth)")
+            config["vector_store"] = {
+                "provider": "opensearch",
+                "config": {
+                    "port": 443,
+                    "collection_name": os.environ.get("OPENSEARCH_COLLECTION", "mem0"),
+                    "host": os.environ.get("OPENSEARCH_HOST"),
+                    "embedding_model_dims": 1024,
+                    "connection_class": RequestsHttpConnection,
+                    "pool_maxsize": 20,
+                    "use_ssl": True,
+                    "verify_certs": True,
+                },
+            }
 
-        # Set up AWS region
-        self.region = os.environ.get("AWS_REGION", "us-west-2")
-        if not os.environ.get("AWS_REGION"):
-            os.environ["AWS_REGION"] = self.region
+            # Set up AWS region
+            self.region = os.environ.get("AWS_REGION", "us-west-2")
+            if not os.environ.get("AWS_REGION"):
+                os.environ["AWS_REGION"] = self.region
 
-        # Set up AWS credentials
-        session = boto3.Session()
-        credentials = session.get_credentials()
-        auth = AWSV4SignerAuth(credentials, self.region, "aoss")
+            # Set up AWS credentials
+            session = boto3.Session()
+            credentials = session.get_credentials()
+            auth = AWSV4SignerAuth(credentials, self.region, "aoss")
 
-        # Prepare configuration
-        merged_config = self._merge_config(config)
-        merged_config["vector_store"]["config"].update({"http_auth": auth, "host": os.environ["OPENSEARCH_HOST"]})
+            # Prepare configuration
+            merged_config = self._merge_config(config)
+            merged_config["vector_store"]["config"].update({"http_auth": auth, "host": os.environ["OPENSEARCH_HOST"]})
 
-        return merged_config
+            return merged_config
 
     def _append_faiss_config(self, config: Optional[Dict] = None) -> Dict:
         """Update incoming configuration dictionary to include the configuration of FAISS vector backend.
@@ -383,36 +357,92 @@ class Mem0ServiceClient:
     ):
         """Store a memory in Mem0."""
         if not user_id and not agent_id:
-            raise ValueError("Either user_id or agent_id must be provided")
+            raise ValueError(
+                "ERROR: Either user_id or agent_id must be provided for storing memories.\n"
+                "USAGE: mem0_memory(action='store', content='...', user_id='alex') OR\n"
+                "       mem0_memory(action='store', content='...', agent_id='agent1')\n"
+                "NOTE: user_id is for user-specific memories, agent_id is for agent-specific memories"
+            )
 
         messages = [{"role": "user", "content": content}]
-        return self.mem0.add(messages, user_id=user_id, agent_id=agent_id, metadata=metadata)
+        try:
+            # Mem0 ALWAYS returns {"results": [...], "relations": [...]} structure
+            return self.mem0.add(messages, user_id=user_id, agent_id=agent_id, metadata=metadata)
+        except Exception as e:
+            logger.error(f"Error storing memory: {e}")
+            raise
 
     def get_memory(self, memory_id: str):
         """Get a memory by ID."""
-        return self.mem0.get(memory_id)
+        try:
+            # Mem0 returns a memory dict if found, None if not found
+            result = self.mem0.get(memory_id)
+            if result is None:
+                raise ValueError(f"Memory with ID '{memory_id}' not found")
+            return result
+        except Exception as e:
+            logger.error(f"Error getting memory: {e}")
+            raise
 
     def list_memories(self, user_id: Optional[str] = None, agent_id: Optional[str] = None):
         """List all memories for a user or agent."""
         if not user_id and not agent_id:
-            raise ValueError("Either user_id or agent_id must be provided")
+            raise ValueError(
+                "ERROR: Either user_id or agent_id must be provided for listing memories.\n"
+                "USAGE: mem0_memory(action='list', user_id='alex') OR\n"
+                "       mem0_memory(action='list', agent_id='agent1')\n"
+                "TIP: Use the same ID you used when storing memories"
+            )
 
-        return self.mem0.get_all(user_id=user_id, agent_id=agent_id)
+        try:
+            # Mem0 ALWAYS returns {"results": [...], "relations": [...]} structure
+            return self.mem0.get_all(user_id=user_id, agent_id=agent_id)
+        except Exception as e:
+            logger.error(f"Error listing memories: {e}")
+            raise
 
     def search_memories(self, query: str, user_id: Optional[str] = None, agent_id: Optional[str] = None):
         """Search memories using semantic search."""
         if not user_id and not agent_id:
-            raise ValueError("Either user_id or agent_id must be provided")
+            raise ValueError(
+                "ERROR: Either user_id or agent_id must be provided for searching memories.\n"
+                "USAGE: mem0_memory(action='retrieve', query='...', user_id='alex') OR\n"
+                "       mem0_memory(action='retrieve', query='...', agent_id='agent1')\n"
+                "TIP: Use the same ID you used when storing memories"
+            )
 
-        return self.mem0.search(query=query, user_id=user_id, agent_id=agent_id)
+        try:
+            # Mem0 ALWAYS returns {"results": [...], "relations": [...]} structure
+            return self.mem0.search(query=query, user_id=user_id, agent_id=agent_id)
+        except Exception as e:
+            logger.error(f"Error searching memories: {e}")
+            raise
 
     def delete_memory(self, memory_id: str):
         """Delete a memory by ID."""
-        return self.mem0.delete(memory_id)
+        try:
+            # Mem0 returns {"message": "Memory deleted successfully!"}
+            return self.mem0.delete(memory_id)
+        except Exception as e:
+            logger.error(f"Error deleting memory: {e}")
+            raise
+
+    def update_memory(self, memory_id: str, text: Optional[str] = None, metadata: Optional[Dict] = None):
+        """Update a memory by ID."""
+        try:
+            return self.mem0.update(memory_id, text=text, metadata=metadata)
+        except Exception as e:
+            logger.error(f"Error updating memory: {e}")
+            raise
 
     def get_memory_history(self, memory_id: str):
         """Get the history of a memory by ID."""
-        return self.mem0.history(memory_id)
+        try:
+            # Mem0 returns list of history dicts, or empty list [] if no history
+            return self.mem0.history(memory_id)
+        except Exception as e:
+            logger.error(f"Error getting memory history: {e}")
+            raise
 
 
 def format_get_response(memory: Dict) -> Panel:
@@ -458,7 +488,7 @@ def format_list_response(memories: List[Dict]) -> Panel:
         metadata = memory.get("metadata", {})
 
         # Truncate content if too long
-        content_preview = content[:100] + "..." if len(content) > 100 else content
+        content_preview = content[:100] + "..." if content and len(content) > 100 else (content or "No content available")
 
         # Format metadata for display
         metadata_str = json.dumps(metadata, indent=2) if metadata else "None"
@@ -499,7 +529,7 @@ def format_retrieve_response(memories: List[Dict]) -> Panel:
         metadata = memory.get("metadata", {})
 
         # Truncate content if too long
-        content_preview = content[:100] + "..." if len(content) > 100 else content
+        content_preview = content[:100] + "..." if content and len(content) > 100 else (content or "No content available")
 
         # Format metadata for display
         metadata_str = json.dumps(metadata, indent=2) if metadata else "None"
@@ -583,8 +613,8 @@ def format_history_response(history: List[Dict]) -> Panel:
         created_at = entry.get("created_at", "Unknown")
 
         # Truncate memory content if too long
-        old_memory_preview = old_memory[:100] + "..." if old_memory and len(old_memory) > 100 else old_memory
-        new_memory_preview = new_memory[:100] + "..." if new_memory and len(new_memory) > 100 else new_memory
+        old_memory_preview = old_memory[:100] + "..." if old_memory and len(old_memory) > 100 else (old_memory or "None")
+        new_memory_preview = new_memory[:100] + "..." if new_memory and len(new_memory) > 100 else (new_memory or "None")
 
         table.add_row(entry_id, memory_id, event, old_memory_preview, new_memory_preview, created_at)
 
@@ -604,7 +634,7 @@ def format_store_response(results: List[Dict]) -> Panel:
         event = memory.get("event")
         text = memory.get("memory")
         # Truncate content if too long
-        content_preview = text[:100] + "..." if len(text) > 100 else text
+        content_preview = text[:100] + "..." if text and len(text) > 100 else (text or "No content")
         table.add_row(event, content_preview)
 
     return Panel(table, title="[bold green]Memory Stored", border_style="green")
@@ -621,44 +651,88 @@ def format_store_graph_response(memories: List[Dict]) -> Panel:
     table.add_column("Target", style="green", width=30)
 
     for memory in memories:
-        source = memory[0].get("source", "N/A")
-        relationship = memory[0].get("relationship", "N/A")
-        destination = memory[0].get("target", "N/A")
+        # Handle both nested list format and direct dict format
+        if isinstance(memory, list) and len(memory) > 0:
+            # Nested list format: [[{source, relationship, target}]]
+            item = memory[0] if isinstance(memory[0], dict) else memory
+            source = item.get("source", "N/A")
+            relationship = item.get("relationship", "N/A")
+            destination = item.get("target", "N/A")
+        elif isinstance(memory, dict):
+            # Direct dict format: {source, relationship, target}
+            source = memory.get("source", "N/A")
+            relationship = memory.get("relationship", "N/A")
+            destination = memory.get("target", memory.get("destination", "N/A"))
+        else:
+            # Skip invalid formats
+            continue
 
         table.add_row(source, relationship, destination)
 
     return Panel(table, title="[bold green]Memories Stored (Graph)", border_style="green")
 
 
-def mem0_memory(tool: ToolUse, **kwargs: Any) -> ToolResult:
-    """
-    Memory management tool for storing, retrieving, and managing memories in Mem0.
+@tool
+def mem0_memory(
+    action: str,
+    content: Optional[str] = None,
+    memory_id: Optional[str] = None,
+    query: Optional[str] = None,
+    user_id: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    metadata: Optional[Dict] = None,
+) -> Dict:
+    """Memory management tool for storing, retrieving, and managing memories in Mem0.
 
     This tool provides a comprehensive interface for managing memories with Mem0,
     including storing new memories, retrieving existing ones, listing all memories,
     performing semantic searches, and managing memory history.
 
+    CRITICAL: HOW TO DETERMINE user_id AND agent_id
+    ------------------------------------------------
+    user_id: The ACTUAL USER'S identifier from your application context
+        - Use the logged-in user's username, email, or database ID
+        - Examples: "tim_hunter", "user@example.com", "user_12345"
+        - MUST be consistent across all sessions for the same user
+        - Use this to store memories ABOUT the user or FROM the user
+
+    agent_id: The AGENT'S OWN consistent identifier
+        - Use your agent's name or identifier (e.g., "ron", "assistant", "travel_planner")
+        - MUST be the same value every time this agent runs
+        - Use this to store the agent's own knowledge or context
+
+    WHEN TO USE WHICH:
+    - Storing user preferences/info → user_id="<actual_user_identifier>"
+    - Storing agent's learned context → agent_id="<your_agent_name>"
+    - NEVER use generic values like "test_user" or "agent1" in production
+
+    IMPORTANT ID REQUIREMENTS:
+    - store, list, retrieve actions: MUST provide either user_id OR agent_id (not both)
+    - get, delete, history actions: MUST provide memory_id
+    - IDs are arbitrary strings but MUST be consistent across sessions
+
+    COMMON USAGE PATTERNS:
+    1. Store user preference: action='store', content='User prefers dark mode', user_id='<actual_user_id>'
+    2. Store agent learning: action='store', content='User asked about Python', agent_id='<your_agent_name>'
+    3. List user memories: action='list', user_id='<actual_user_id>'
+    4. Search agent memories: action='retrieve', query='previous interactions', agent_id='<your_agent_name>'
+    5. Delete specific memory: action='delete', memory_id='mem_123'
+
     Args:
-        tool: ToolUse object containing the following input fields:
-            - action: The action to perform (store, get, list, retrieve, delete, history)
-            - content: Content to store (for store action)
-            - memory_id: Memory ID (for get, delete, history actions)
-            - query: Search query (for retrieve action)
-            - user_id: User ID for the memory operations
-            - agent_id: Agent ID for the memory operations
-            - metadata: Optional metadata to store with the memory
-        **kwargs: Additional keyword arguments
+        action: The action to perform (store, get, list, retrieve, delete, history)
+        content: Content to store (required for store action)
+        memory_id: Memory ID from a previous list/retrieve operation (required for get, delete, history)
+        query: Semantic search query to find relevant memories (required for retrieve action)
+        user_id: The actual user's identifier from application context (username, email, user DB ID)
+        agent_id: This agent's consistent identifier (e.g., "ron", "assistant", your agent name)
+        metadata: Optional metadata dict to attach to the memory (e.g., {"category": "preferences"})
 
     Returns:
-        ToolResult containing status and response content
+        Dictionary containing status and response content
     """
     try:
-        # Extract input from tool use object
-        tool_input = tool.get("input", {})
-        tool_use_id = tool.get("toolUseId", "default-id")
-
         # Validate required parameters
-        if not tool_input.get("action"):
+        if not action:
             raise ValueError("action parameter is required")
 
         # Initialize client
@@ -667,9 +741,6 @@ def mem0_memory(tool: ToolUse, **kwargs: Any) -> ToolResult:
         # Check if we're in development mode
         strands_dev = os.environ.get("BYPASS_TOOL_CONSENT", "").lower() == "true"
 
-        # Handle different actions
-        action = tool_input["action"]
-
         # For mutative operations, show confirmation dialog unless in BYPASS_TOOL_CONSENT mode
         mutative_actions = {"store", "delete"}
         needs_confirmation = action in mutative_actions and not strands_dev
@@ -677,38 +748,38 @@ def mem0_memory(tool: ToolUse, **kwargs: Any) -> ToolResult:
         if needs_confirmation:
             if action == "store":
                 # Validate content
-                if not tool_input.get("content"):
+                if not content:
                     raise ValueError("content is required for store action")
 
                 # Preview what will be stored
                 content_preview = (
-                    tool_input["content"][:15000] + "..."
-                    if len(tool_input["content"]) > 15000
-                    else tool_input["content"]
+                    content[:15000] + "..."
+                    if content and len(content) > 15000
+                    else content
                 )
                 preview_title = (
-                    f"Memory for {'user ' + tool_input.get('user_id', '')}"
-                    if tool_input.get("user_id")
-                    else f"agent {tool_input.get('agent_id', '')}"
+                    f"Memory for {'user ' + user_id}"
+                    if user_id
+                    else f"agent {agent_id}"
                 )
 
                 console.print(Panel(content_preview, title=f"[bold green]{preview_title}", border_style="green"))
 
             elif action == "delete":
                 # Validate memory_id
-                if not tool_input.get("memory_id"):
+                if not memory_id:
                     raise ValueError("memory_id is required for delete action")
 
                 # Try to get memory info first for better context
                 try:
-                    memory = client.get_memory(tool_input["memory_id"])
-                    metadata = memory.get("metadata", {})
+                    memory = client.get_memory(memory_id)
+                    memory_metadata = memory.get("metadata", {})
 
                     console.print(
                         Panel(
                             (
-                                f"Memory ID: {tool_input['memory_id']}\n"
-                                f"Metadata: {json.dumps(metadata) if metadata else 'None'}"
+                                f"Memory ID: {memory_id}\n"
+                                f"Metadata: {json.dumps(memory_metadata) if memory_metadata else 'None'}"
                             ),
                             title="[bold red]⚠️ Memory to be permanently deleted",
                             border_style="red",
@@ -718,7 +789,7 @@ def mem0_memory(tool: ToolUse, **kwargs: Any) -> ToolResult:
                     # Fall back to basic info if we can't get memory details
                     console.print(
                         Panel(
-                            f"Memory ID: {tool_input['memory_id']}",
+                            f"Memory ID: {memory_id}",
                             title="[bold red]⚠️ Memory to be permanently deleted",
                             border_style="red",
                         )
@@ -726,116 +797,152 @@ def mem0_memory(tool: ToolUse, **kwargs: Any) -> ToolResult:
 
         # Execute the requested action
         if action == "store":
-            if not tool_input.get("content"):
-                raise ValueError("content is required for store action")
+            if not content:
+                raise ValueError(
+                    "ERROR: 'store' action requires 'content' parameter.\n"
+                    "USAGE: mem0_memory(action='store', content='Text to remember', user_id='alex')"
+                )
 
             results = client.store_memory(
-                tool_input["content"],
-                tool_input.get("user_id"),
-                tool_input.get("agent_id"),
-                tool_input.get("metadata"),
+                content,
+                user_id,
+                agent_id,
+                metadata,
             )
 
-            # Normalize to list
-            results_list = results if isinstance(results, list) else results.get("results", [])
+            # Mem0 ALWAYS returns {"results": [...], "relations": [...]} structure
+            results_list = results.get("results", [])
+
             if results_list:
                 panel = format_store_response(results_list)
                 console.print(panel)
 
-            # Process graph relations (If any)
-            if "relations" in results:
-                relationships_list = results.get("relations").get("added_entities", [])
-                results_list.extend(relationships_list)
-                panel_graph = format_store_graph_response(relationships_list)
+            # Process graph relations if present (relations is a list, not dict)
+            relations = results.get("relations", [])
+            if relations:
+                panel_graph = format_store_graph_response(relations)
                 console.print(panel_graph)
 
-            return ToolResult(
-                toolUseId=tool_use_id,
-                status="success",
-                content=[ToolResultContent(text=json.dumps(results_list, indent=2))],
-            )
+            return {
+                "status": "success",
+                "content": [{"text": json.dumps(results_list, indent=2)}],
+            }
 
         elif action == "get":
-            if not tool_input.get("memory_id"):
-                raise ValueError("memory_id is required for get action")
+            if not memory_id:
+                raise ValueError(
+                    "ERROR: 'get' action requires 'memory_id' parameter.\n"
+                    "USAGE: mem0_memory(action='get', memory_id='mem_123')\n"
+                    "TIP: Use 'list' action first to find memory IDs"
+                )
 
-            memory = client.get_memory(tool_input["memory_id"])
+            memory = client.get_memory(memory_id)
             panel = format_get_response(memory)
             console.print(panel)
-            return ToolResult(
-                toolUseId=tool_use_id, status="success", content=[ToolResultContent(text=json.dumps(memory, indent=2))]
-            )
+            return {
+                "status": "success",
+                "content": [{"text": json.dumps(memory, indent=2)}],
+            }
 
         elif action == "list":
-            memories = client.list_memories(tool_input.get("user_id"), tool_input.get("agent_id"))
-            # Normalize to list
-            results_list = memories if isinstance(memories, list) else memories.get("results", [])
+            memories = client.list_memories(user_id, agent_id)
+            # Mem0 ALWAYS returns {"results": [...], "relations": [...]} structure
+            results_list = memories.get("results", [])
+
             panel = format_list_response(results_list)
             console.print(panel)
 
-            # Process graph relations (If any)
-            if "relations" in memories:
-                relationships_list = memories.get("relations", [])
-                results_list.extend(relationships_list)
-                panel_graph = format_list_graph_response(relationships_list)
+            # Process graph relations if present (relations is a list, not dict)
+            relations = memories.get("relations", [])
+            if relations:
+                panel_graph = format_list_graph_response(relations)
                 console.print(panel_graph)
 
-            return ToolResult(
-                toolUseId=tool_use_id,
-                status="success",
-                content=[ToolResultContent(text=json.dumps(results_list, indent=2))],
-            )
+            return {
+                "status": "success",
+                "content": [{"text": json.dumps(results_list, indent=2)}],
+            }
 
         elif action == "retrieve":
-            if not tool_input.get("query"):
-                raise ValueError("query is required for retrieve action")
+            if not query:
+                raise ValueError(
+                    "ERROR: 'retrieve' action requires 'query' parameter.\n"
+                    "USAGE: mem0_memory(action='retrieve', query='search text', user_id='alex')"
+                )
 
             memories = client.search_memories(
-                tool_input["query"],
-                tool_input.get("user_id"),
-                tool_input.get("agent_id"),
+                query,
+                user_id,
+                agent_id,
             )
-            # Normalize to list
-            results_list = memories if isinstance(memories, list) else memories.get("results", [])
+            # Mem0 ALWAYS returns {"results": [...], "relations": [...]} structure
+            results_list = memories.get("results", [])
+
             panel = format_retrieve_response(results_list)
             console.print(panel)
 
-            # Process graph relations (If any)
-            if "relations" in memories:
-                relationships_list = memories.get("relations", [])
-                results_list.extend(relationships_list)
-                panel_graph = format_retrieve_graph_response(relationships_list)
+            # Process graph relations if present (relations is a list, not dict)
+            relations = memories.get("relations", [])
+            if relations:
+                panel_graph = format_retrieve_graph_response(relations)
                 console.print(panel_graph)
 
-            return ToolResult(
-                toolUseId=tool_use_id,
-                status="success",
-                content=[ToolResultContent(text=json.dumps(results_list, indent=2))],
-            )
+            return {
+                "status": "success",
+                "content": [{"text": json.dumps(results_list, indent=2)}],
+            }
 
         elif action == "delete":
-            if not tool_input.get("memory_id"):
-                raise ValueError("memory_id is required for delete action")
+            if not memory_id:
+                raise ValueError(
+                    "ERROR: 'delete' action requires 'memory_id' parameter.\n"
+                    "USAGE: mem0_memory(action='delete', memory_id='mem_123')\n"
+                    "TIP: Use 'list' action first to find memory IDs"
+                )
 
-            client.delete_memory(tool_input["memory_id"])
-            panel = format_delete_response(tool_input["memory_id"])
+            client.delete_memory(memory_id)
+            panel = format_delete_response(memory_id)
             console.print(panel)
-            return ToolResult(
-                toolUseId=tool_use_id,
-                status="success",
-                content=[ToolResultContent(text=f"Memory {tool_input['memory_id']} deleted successfully")],
-            )
+            return {
+                "status": "success",
+                "content": [{"text": f"Memory {memory_id} deleted successfully"}],
+            }
+
+        elif action == "update":
+            if not memory_id:
+                raise ValueError(
+                    "ERROR: 'update' action requires 'memory_id' parameter.\n"
+                    "USAGE: mem0_memory(action='update', memory_id='mem_123', content='New text')\n"
+                    "TIP: Use 'list' action first to find memory IDs"
+                )
+            if not content and not metadata:
+                raise ValueError(
+                    "ERROR: 'update' action requires 'content' or 'metadata' parameter.\n"
+                    "USAGE: mem0_memory(action='update', memory_id='mem_123', content='New text')"
+                )
+
+            result = client.update_memory(memory_id, text=content, metadata=metadata)
+            console.print(Panel(f"✅ Memory {memory_id} updated successfully", title="[bold green]Memory Updated", border_style="green"))
+            return {
+                "status": "success",
+                "content": [{"text": json.dumps(result, indent=2)}],
+            }
 
         elif action == "history":
-            if not tool_input.get("memory_id"):
-                raise ValueError("memory_id is required for history action")
+            if not memory_id:
+                raise ValueError(
+                    "ERROR: 'history' action requires 'memory_id' parameter.\n"
+                    "USAGE: mem0_memory(action='history', memory_id='mem_123')\n"
+                    "TIP: Use 'list' action first to find memory IDs"
+                )
 
-            history = client.get_memory_history(tool_input["memory_id"])
+            history = client.get_memory_history(memory_id)
             panel = format_history_response(history)
             console.print(panel)
-            return ToolResult(
-                toolUseId=tool_use_id, status="success", content=[ToolResultContent(text=json.dumps(history, indent=2))]
-            )
+            return {
+                "status": "success",
+                "content": [{"text": json.dumps(history, indent=2)}],
+            }
 
         else:
             raise ValueError(f"Invalid action: {action}")
@@ -847,4 +954,7 @@ def mem0_memory(tool: ToolUse, **kwargs: Any) -> ToolResult:
             border_style="red",
         )
         console.print(error_panel)
-        return ToolResult(toolUseId=tool_use_id, status="error", content=[ToolResultContent(text=f"Error: {str(e)}")])
+        return {
+            "status": "error",
+            "content": [{"text": f"Error: {str(e)}"}],
+        }

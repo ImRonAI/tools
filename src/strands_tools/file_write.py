@@ -62,31 +62,10 @@ from rich import box
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.text import Text
-from strands.types.tools import ToolResult, ToolUse
+from strands import tool
 
 from strands_tools.utils import console_util
 from strands_tools.utils.user_input import get_user_input
-
-TOOL_SPEC = {
-    "name": "file_write",
-    "description": "Write content to a file with proper formatting and validation based on file type",
-    "inputSchema": {
-        "json": {
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "The path to the file to write",
-                },
-                "content": {
-                    "type": "string",
-                    "description": "The content to write to the file",
-                },
-            },
-            "required": ["path", "content"],
-        }
-    },
-}
 
 
 def detect_language(file_path: str) -> str:
@@ -137,7 +116,8 @@ def create_rich_panel(content: str, title: Optional[str] = None, syntax_language
     )
 
 
-def file_write(tool: ToolUse, **kwargs: Any) -> ToolResult:
+@tool
+def file_write(path: str, content: str) -> dict:
     """
     Write content to a file with interactive confirmation and rich feedback.
 
@@ -164,16 +144,13 @@ def file_write(tool: ToolUse, **kwargs: Any) -> ToolResult:
     - Saving user-specific settings or preferences
 
     Args:
-        tool: ToolUse object containing the following input fields:
-            - path: The path to the file to write. User paths with tilde (~)
-                    are automatically expanded.
-            - content: The content to write to the file.
-        **kwargs: Additional keyword arguments (not used currently)
+        path: The path to the file to write. User paths with tilde (~)
+              are automatically expanded.
+        content: The content to write to the file.
 
     Returns:
-        ToolResult containing status and response content in the format:
+        Dict containing status and response content in the format:
         {
-            "toolUseId": "<tool_use_id>",
             "status": "success|error",
             "content": [{"text": "Response message"}]
         }
@@ -187,11 +164,7 @@ def file_write(tool: ToolUse, **kwargs: Any) -> ToolResult:
     """
     console = console_util.create()
 
-    tool_use_id = tool["toolUseId"]
-    tool_input = tool["input"]
-    path = expanduser(tool_input["path"])
-    content = tool_input["content"]
-
+    path = expanduser(path)
     strands_dev = os.environ.get("BYPASS_TOOL_CONSENT", "").lower() == "true"
 
     # Create a panel with file information
@@ -236,7 +209,6 @@ def file_write(tool: ToolUse, **kwargs: Any) -> ToolResult:
             )
             console.print(error_panel)
             return {
-                "toolUseId": tool_use_id,
                 "status": "error",
                 "content": [{"text": error_message}],
             }
@@ -270,7 +242,6 @@ def file_write(tool: ToolUse, **kwargs: Any) -> ToolResult:
         )
         console.print(success_panel)
         return {
-            "toolUseId": tool_use_id,
             "status": "success",
             "content": [{"text": f"File write success: {success_message}"}],
         }
@@ -285,7 +256,6 @@ def file_write(tool: ToolUse, **kwargs: Any) -> ToolResult:
         )
         console.print(error_panel)
         return {
-            "toolUseId": tool_use_id,
             "status": "error",
             "content": [{"text": error_message}],
         }

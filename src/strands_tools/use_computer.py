@@ -525,11 +525,24 @@ def extract_text_from_image(image_path: str, min_confidence: float = 0.5) -> Lis
 
     Returns:
         List of dictionaries with text and its coordinates
+
+    Known OCR Limitations (Important for troubleshooting):
+        - Stylized/decorative fonts may not be detected
+        - Low contrast text (e.g., light gray on white) often missed
+        - Small text (< 10px) has poor detection rate
+        - Rotated or skewed text may be missed
+        - Text embedded in images/logos usually not detected
+        - UI elements like buttons may use non-standard rendering
+
+    If OCR misses text, try:
+        1. Lowering min_confidence parameter (default 0.5)
+        2. Using send_screenshot=True to visually inspect
+        3. Clicking directly on coordinates if you know the location
     """
     # Read the image
     img = cv2.imread(image_path)
     if img is None:
-        raise ValueError(f"Could not read image at {image_path}")
+        raise ValueError(f"Could not read image at {image_path}. Ensure the file exists and is a valid image format.")
 
     # Get image dimensions for potential scaling adjustments
     img_height, img_width = img.shape[:2]
@@ -737,9 +750,76 @@ def focus_application(app_name: str, timeout: float = 2.0) -> bool:
         - macOS: Uses AppleScript's 'activate' command
         - Windows: Uses PowerShell's AppActivate method
         - Linux: Attempts to use wmctrl if available
+
+    Known Issues:
+        - App names are case-sensitive on some platforms
+        - Some apps have different internal names vs display names (e.g., "Google Chrome" vs "Chrome")
+        - Apps with multiple windows may not focus the expected window
+        - Some apps take longer to respond and may need increased timeout
     """
     system = platform.system().lower()
     start_time = time.time()
+
+    # Extended app name mappings for better reliability - includes more variations
+    app_name_mappings = {
+        # Browsers
+        "chrome": "Google Chrome",
+        "google chrome": "Google Chrome",
+        "googlechrome": "Google Chrome",
+        "safari": "Safari",
+        "firefox": "Firefox",
+        "mozilla firefox": "Firefox",
+        "edge": "Microsoft Edge",
+        "microsoft edge": "Microsoft Edge",
+        "brave": "Brave Browser",
+        "brave browser": "Brave Browser",
+        # Development
+        "vscode": "Visual Studio Code",
+        "vs code": "Visual Studio Code",
+        "code": "Visual Studio Code",
+        "visual studio code": "Visual Studio Code",
+        "xcode": "Xcode",
+        "sublime": "Sublime Text",
+        "sublime text": "Sublime Text",
+        "atom": "Atom",
+        # Communication
+        "slack": "Slack",
+        "teams": "Microsoft Teams",
+        "microsoft teams": "Microsoft Teams",
+        "zoom": "zoom.us",
+        "zoom.us": "zoom.us",
+        "discord": "Discord",
+        "skype": "Skype",
+        # Office
+        "outlook": "Microsoft Outlook",
+        "excel": "Microsoft Excel",
+        "word": "Microsoft Word",
+        "powerpoint": "Microsoft PowerPoint",
+        "pages": "Pages",
+        "numbers": "Numbers",
+        "keynote": "Keynote",
+        # System
+        "finder": "Finder",
+        "terminal": "Terminal",
+        "iterm": "iTerm",
+        "iterm2": "iTerm",
+        "console": "Console",
+        "activity monitor": "Activity Monitor",
+        # Other common apps
+        "notion": "Notion",
+        "spotify": "Spotify",
+        "music": "Music",
+        "messages": "Messages",
+        "mail": "Mail",
+        "calendar": "Calendar",
+        "notes": "Notes",
+    }
+
+    # Try to use a mapped name if available (case-insensitive lookup)
+    normalized_name = app_name_mappings.get(app_name.lower(), app_name)
+    if normalized_name != app_name:
+        logger.info(f"Using normalized app name: '{normalized_name}' for '{app_name}'")
+        app_name = normalized_name
 
     try:
         if system == "darwin":  # macOS
@@ -750,16 +830,28 @@ def focus_application(app_name: str, timeout: float = 2.0) -> bool:
             try:
                 result = subprocess.run(["osascript", "-e", script], check=True, capture_output=True, timeout=timeout)
                 if result.returncode != 0:
-                    logger.warning(f"Focus application returned non-zero exit code: {result.returncode}")
+                    error_output = result.stderr.decode('utf-8', errors='ignore').strip()
+                    logger.warning(f"Focus application returned non-zero exit code: {result.returncode}. Error: {error_output}")
+
+                    # Check if app exists and provide helpful suggestions
+                    if "Can't get application" in error_output or "Unable to find application" in error_output:
+                        logger.error(
+                            f"Application '{app_name}' not found. Please check:\n"
+                            f"1. Is the app name correct? Common names: 'Google Chrome', 'Safari', 'Terminal'\n"
+                            f"2. Is the app installed?\n"
+                            f"3. Try opening the app manually first\n"
+                            f"4. On macOS, use the exact name shown in Applications folder"
+                        )
                     return False
 
                 # Brief pause for window to focus, but respect overall timeout
                 remaining_time = timeout - (time.time() - start_time)
                 if remaining_time > 0:
-                    time.sleep(min(0.2, remaining_time))
+                    # Increased to 0.5s for better reliability with slow apps
+                    time.sleep(min(0.5, remaining_time))
                 return True
             except subprocess.TimeoutExpired:
-                logger.warning(f"Focus operation timed out after {timeout} seconds for app: {app_name}")
+                logger.warning(f"Focus operation timed out after {timeout} seconds for app: {app_name}. Consider increasing focus_timeout parameter.")
                 return False
 
         elif system == "windows":
@@ -880,7 +972,15 @@ def handle_analyze_screenshot_pytesseract(
     try:
         text_data = extract_text_from_image(image_path, min_confidence)
         if not text_data:
-            result = f"No text detected in screenshot {image_path}"
+            result = (
+                f"No text detected in screenshot {image_path}.\n"
+                f"Possible reasons:\n"
+                f"- The screen area may not contain text\n"
+                f"- Text may be in an unsupported font or too stylized\n"
+                f"- Text contrast may be too low (try adjusting min_confidence parameter, current: {min_confidence})\n"
+                f"- Text may be too small to detect reliably\n"
+                f"- Consider using send_screenshot=True to send the image for visual inspection"
+            )
         else:
             formatted_result = f"Detected {len(text_data)} text elements in {image_path}:\n\n"
             for idx, item in enumerate(text_data, 1):
@@ -900,7 +1000,14 @@ def handle_analyze_screenshot_pytesseract(
     except Exception as e:
         if should_delete:
             delete_screenshot(image_path)
-        raise RuntimeError(f"Error analyzing screenshot: {str(e)}") from e
+        error_msg = (
+            f"Error analyzing screenshot: {str(e)}\n"
+            f"Troubleshooting tips:\n"
+            f"- Ensure Tesseract OCR is installed (brew install tesseract on macOS)\n"
+            f"- Check if the screen/region is visible and not obscured\n"
+            f"- Try adjusting the min_confidence parameter (current: {min_confidence})"
+        )
+        raise RuntimeError(error_msg) from e
 
 
 @tool
