@@ -4,23 +4,8 @@ Dynamic tool loading functionality for Strands Agent.
 This module provides functionality to dynamically load Python tools at runtime,
 allowing you to extend your agent's capabilities without restarting the application.
 
-Working Directory Context:
-The agent's working directory (cwd) is the directory from which you execute the
-'strands' command or start your agent process. This is typically your project root
-or the directory containing your agent scripts.
-
-Hot-Reload Behavior:
-Strands automatically hot reloads Python files located in the ./tools/ directory
-relative to the agent's working directory. Any .py files placed in this directory
-are instantly available as tools without requiring explicit load_tool calls.
-
-Example directory structure:
-  /my-project/              <- Working directory (where you run 'strands')
-    /tools/                 <- Auto-loaded tool directory
-      my_custom_tool.py     <- Automatically loaded
-      another_tool.py       <- Automatically loaded
-    agent.py                <- Your agent script
-
+Strands automatically hot reloads Python files located in the cwd()/tools/ directory,
+making them instantly available as tools without requiring explicit load_tool calls.
 For tools located elsewhere, you can use this load_tool function.
 
 Usage with Strands Agent:
@@ -42,7 +27,7 @@ agent.tool.my_custom_tool(param1="value", param2="value")
 
 Tool files can be defined using the new, more concise @tool decorator pattern:
 ```python
-# ./tools/my_custom_tool.py (relative to where you run 'strands')
+# cwd()/tools/my_custom_tool.py
 from strands import tool
 
 @tool
@@ -84,15 +69,6 @@ def load_tool(path: str, name: str, agent=None) -> Dict[str, Any]:
     The tool file can use either the new @tool decorator approach (recommended)
     or the traditional TOOL_SPEC dictionary method.
 
-    Args:
-        path: Path to the Python tool file to load. Can be absolute or relative.
-              User paths with tilde (~) are automatically expanded.
-        name: Name of the tool function to register. This is the name that will be
-              used to access the tool through the agent (e.g., agent.tool.name(...)).
-        agent: Optional agent instance. If not provided, the function will attempt to
-               get the current agent from context. For most use cases, this can be left
-               as None and the tool will automatically use the running agent.
-
     How It Works:
     ------------
     1. The function validates the provided tool file path exists
@@ -121,7 +97,7 @@ def load_tool(path: str, name: str, agent=None) -> Dict[str, Any]:
 
     Recommended Tool File Structure (using @tool decorator):
     ```python
-    # ./tools/my_custom_tool.py (relative to agent's working directory)
+    # cwd()/tools/my_custom_tool.py
     from strands import tool
 
     @tool
@@ -141,7 +117,7 @@ def load_tool(path: str, name: str, agent=None) -> Dict[str, Any]:
 
     Alternative Tool File Structure (using TOOL_SPEC):
     ```python
-    # ./tools/my_custom_tool.py (relative to agent's working directory)
+    # cwd()/tools/my_custom_tool.py
     from typing import Any
     from strands.types.tools import ToolResult, ToolUse
 
@@ -172,6 +148,15 @@ def load_tool(path: str, name: str, agent=None) -> Dict[str, Any]:
         }
     ```
 
+    Args:
+        path: Path to the Python tool file to load. Can be absolute or relative.
+            User paths with tilde (~) are automatically expanded.
+        name: Name of the tool function to register. This is the name that will be
+            used to access the tool through the agent (e.g., agent.tool.name(...)).
+        agent: Optional agent instance. If not provided, the function will attempt to
+            get the current agent from context. For most use cases, this can be left
+            as None and the tool will automatically use the running agent.
+
     Returns:
         Dict containing status and response content in the format:
         {
@@ -189,10 +174,10 @@ def load_tool(path: str, name: str, agent=None) -> Dict[str, Any]:
 
     Notes:
         - The tool loading can be disabled via STRANDS_DISABLE_LOAD_TOOL=true environment variable
-        - Working Directory (cwd): The directory from which you execute 'strands' or start your agent
-        - Auto-loading: Python files in cwd/tools/ are automatically hot reloaded without explicit load_tool calls
-        - Example: If you run 'strands' from /home/user/project/, tools in /home/user/project/tools/ auto-load
-        - When using the load_tool function for tools outside cwd/tools/, ensure proper docstrings
+        - Python files in the cwd()/tools/ directory are automatically hot reloaded without
+          requiring explicit calls to load_tool
+        - When using the load_tool function, ensure your tool files have proper docstrings as they are
+          displayed in the agent's available tools
         - For security reasons, tool loading might be restricted in production environments
         - The @tool decorator approach is recommended for new tools as it's more concise and type-safe
     """
