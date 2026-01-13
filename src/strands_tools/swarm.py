@@ -1,18 +1,8 @@
 """Swarm intelligence tool for coordinating custom AI agent teams.
 
-**SWARM PATTERN**: Autonomous agent collaboration with emergent behavior.
-Agents decide when and to whom to handoff tasks. No pre-defined execution path.
-For structured workflows use Workflow tool, for conditional flows use Graph tool.
-
 This module implements a flexible swarm intelligence system that enables users to define
 custom teams of specialized AI agents that collaborate autonomously through shared context
 and tool-based coordination. Built on the Strands SDK Swarm multi-agent pattern.
-
-Key Distinctions from Other Patterns:
--------------------------------------
-• **Swarm (this tool)**: Autonomous handoffs, emergent behavior, agents decide path
-• **Workflow tool**: Fixed DAG of tasks, deterministic parallel execution, no agent conversation
-• **Graph tool**: Structured agent nodes with pre-defined edges, LLM chooses from available paths
 
 Key Features:
 -------------

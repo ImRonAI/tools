@@ -1,18 +1,8 @@
 """Workflow orchestration tool for managing parallel AI tasks with advanced model support.
 
-**WORKFLOW PATTERN**: Pre-defined Task Graph (DAG) executed as a single tool invocation.
-Tasks are non-conversational and execute deterministically based on dependencies.
-For agent-based orchestration with conversation flow, use Graph or Swarm tools instead.
-
 This module provides an advanced workflow orchestration system that supports parallel AI task
 execution with granular control over model providers, tool access, and execution parameters.
 Built on modern Strands SDK patterns with rich monitoring and robust error handling.
-
-Key Distinctions from Other Patterns:
--------------------------------------
-• **Workflow (this tool)**: Fixed DAG of tasks, parallel execution, no cycles, deterministic flow
-• **Graph tool**: Agent nodes with conditional transitions, supports cycles, LLM decides path
-• **Swarm tool**: Autonomous agent handoffs, emergent collaboration, no pre-defined path
 
 Key Features:
 -------------
