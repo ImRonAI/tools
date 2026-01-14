@@ -39,7 +39,7 @@ class TaskTools:
         
         Args:
             title: Title of the task
-            description: Detailed description (supports Markdown)
+            description: HTML content (e.g. <p>, <ul>, <b>). Do NOT use Markdown.
             priority: 'low', 'medium', 'high', 'critical'
             status: 'backlog', 'in-progress', 'review', 'done'
             parent_task_id: ID of parent task (for subtasks)
@@ -49,7 +49,7 @@ class TaskTools:
             due_date: ISO date string (YYYY-MM-DD)
             
         Returns:
-            Dict with status and created task data
+            Dict with status and created task data. IMPORTANT: Save the returned 'id' to update this task later.
         """
         # Convert date string to timestamp (ms) if provided
         due_date_ts = None
@@ -73,6 +73,38 @@ class TaskTools:
             "labels": labels or [],
             "dueDate": due_date_ts
         }
+        
+        # Automatic Session Linking (User Request: "Caused By Conversation Session ID")
+        try:
+            # Lazy import to avoid circular dependency
+            import sys
+            sa = None
+            if "superagent" in sys.modules:
+                import superagent as sa
+            elif "agent.superagent" in sys.modules:
+                import agent.superagent as sa
+                
+            if sa:
+                # Access the current agent session through the singleton
+                if hasattr(sa, "_current_agent") and sa._current_agent:
+                    # Check if session manager has id
+                    session_id = getattr(sa._current_agent.session_manager, "session_id", None)
+                    if session_id and not session_id.startswith("ron-superagent"): 
+                         # 1. Link via externalRefId
+                        task_data["externalRefId"] = session_id
+                        task_data["sourceChannel"] = "ai-generated"
+                        
+                        # 2. Link via Context Links (Deep link to chat)
+                        task_data["contextLinks"] = [{
+                            "id": f"ctx-{int(time.time()*1000)}",
+                            "url": f"ron://chat/{session_id}",
+                            "title": "Originating Conversation",
+                            "type": "reference",
+                            "addedBy": "agent"
+                        }]
+                        logger.info(f"Auto-linked task to session: {session_id}")
+        except Exception as e:
+            logger.warning(f"Failed to auto-link task to session: {e}")
         
         script = f"""
             (function() {{
@@ -99,7 +131,7 @@ class TaskTools:
         Update an existing task.
         
         Args:
-            task_id: ID of the task to update
+            task_id: REQUIRED. The ID of the task to update (returned from create_task or search_tasks).
             updates: Dictionary of fields to update (title, description, status, priority, due_date, assignee_ids, etc.)
             
         Returns:
@@ -186,7 +218,7 @@ class TaskTools:
             limit: Maximum number of results (default 10)
             
         Returns:
-            Dict with list of matching tasks
+            Dict with list of matching tasks. **Each task includes an 'id' field which is REQUIRED for update_task.**
         """
         filters = {
             "query": query,
@@ -228,7 +260,7 @@ class TaskTools:
                 if (filters.labels && filters.labels.length > 0) {{
                     tasks = tasks.filter(t => 
                         filters.labels.every(label => 
-                            t.labels && t.labels.some(l => l.text === label)
+                            t.labels && t.labels.some(l => l.label === label)
                         )
                     );
                 }}
@@ -239,7 +271,7 @@ class TaskTools:
                     title: t.title,
                     status: t.status,
                     priority: t.priority,
-                    labels: t.labels ? t.labels.map(l => l.text) : [],
+                    labels: t.labels ? t.labels.map(l => l.label) : [],
                     subtaskCount: t.subtasks ? t.subtasks.length : 0,
                     hasDescription: !!t.description
                 }}));

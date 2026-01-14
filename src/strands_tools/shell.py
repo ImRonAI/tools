@@ -250,10 +250,22 @@ class CommandContext:
             new_dir = command.split("cd ", 1)[1].strip()
             if new_dir.startswith("/"):
                 # Absolute path
-                self.current_dir = os.path.abspath(new_dir)
+                resolved = os.path.abspath(new_dir)
             else:
                 # Relative path
-                self.current_dir = os.path.abspath(os.path.join(self.current_dir, new_dir))
+                resolved = os.path.abspath(os.path.join(self.current_dir, new_dir))
+            
+            # Check if escaping sandbox
+            sandbox_root = os.environ.get("AGENT_SANDBOX_ROOT", "")
+            if sandbox_root and not resolved.startswith(sandbox_root):
+                from strands_tools.utils.user_input import get_user_input
+                confirm = get_user_input(
+                    f"<yellow><bold>cd to '{resolved}' is OUTSIDE sandbox. Allow? [y/n]</bold></yellow>"
+                )
+                if confirm.lower() != "y":
+                    return  # Don't update dir
+            
+            self.current_dir = resolved
 
 
 def execute_commands(
@@ -511,6 +523,19 @@ def shell(
         timeout = int(os.environ.get("SHELL_DEFAULT_TIMEOUT", "900"))
     if work_dir is None:
         work_dir = os.getcwd()
+    
+    # Sandbox check for work_dir
+    sandbox_root = os.environ.get("AGENT_SANDBOX_ROOT", "")
+    if sandbox_root and not os.path.abspath(work_dir).startswith(sandbox_root):
+        if not non_interactive_mode:
+            confirm = get_user_input(
+                f"<yellow><bold>work_dir '{work_dir}' is OUTSIDE sandbox. Allow? [y/n]</bold></yellow>"
+            )
+            if confirm.lower() != "y":
+                return {
+                    "status": "error",
+                    "content": [{"text": f"Sandbox escape blocked: work_dir '{work_dir}' is outside sandbox"}],
+                }
 
     # Development mode check
     STRANDS_BYPASS_TOOL_CONSENT = os.environ.get("BYPASS_TOOL_CONSENT", "").lower() == "true"

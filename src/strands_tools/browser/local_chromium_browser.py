@@ -14,7 +14,7 @@ from playwright.async_api import Page
 from .models import (
     NavigateAction, NewTabAction, SwitchTabAction, CloseTabAction,
     ClickAction, TypeAction, EvaluateAction, BackAction, ForwardAction, RefreshAction,
-    GetTextAction
+    GetTextAction, ScreenshotAction
 )
 
 from .browser import Browser
@@ -40,6 +40,8 @@ class LocalChromiumBrowser(Browser):
         self._context_options = context_options or {}
         self._default_launch_options: Dict[str, Any] = {}
         self._default_context_options: Dict[str, Any] = {}
+        # Cache for fast lookups
+        self._cached_shell_page: Optional[Page] = None
 
     async def start_platform(self) -> None:
         """Initialize the local Chromium browser platform with configuration (ASYNC)."""
@@ -78,18 +80,21 @@ class LocalChromiumBrowser(Browser):
             import asyncio
             last_error = None
             
-            for i in range(30):
+            # Try for 30 seconds (60 attempts * 0.5s)
+            logger.info(f"Connecting to CDP at {cdp_url}...")
+            for i in range(60):
                 try:
-                    return await self._playwright.chromium.connect_over_cdp(cdp_url)
+                    # Set a short timeout (2s) so we don't hang if the socket is open but silent
+                    return await self._playwright.chromium.connect_over_cdp(cdp_url, timeout=2000)
                 except Exception as e:
                     last_error = e
-                    # logger.info(f"Waiting for CDP Socket... ({i+1}/30)")
-                    logger.info(f"Waiting for CDP Socket... ({i+1}/30)")
+                    if i % 10 == 0: # Log every 5 seconds
+                        logger.info(f"Waiting for Electron CDP... ({i+1}/60) - Ensure Electron is running.")
                     await asyncio.sleep(0.5)
             
             # If all retries fail, raise the last error
-            logger.error(f"Failed to connect to CDP at {cdp_url} after timeout.")
-            raise RuntimeError(f"Failed to connect to CDP at {cdp_url} after timeout. Last error: {last_error}")
+            logger.error(f"Failed to connect to CDP at {cdp_url} after 30 seconds.")
+            raise RuntimeError(f"Failed to connect to CDP at {cdp_url}. Is Electron running? Error: {last_error}")
 
         # Handle persistent context if specified
         if self._default_launch_options.get("persistent_context"):
@@ -123,14 +128,15 @@ class LocalChromiumBrowser(Browser):
             # to ensure we attach to the window that has the Preload API loaded.
             if "cdp_url" in self._default_launch_options:
                 # Retry logic to wait for initial context/page (race condition mitigation)
-                # Increased to 30 attempts (15 seconds) to allow for app startup
-                for i in range(30):
+                # Increased to 60 attempts (30 seconds) to allow for app startup
+                for i in range(60):
                     if browser_or_context.contexts:
                         # Found a context, now check for pages within it
                         ctx = browser_or_context.contexts[0]
                         if ctx.pages:
                             break
-                    logger.info(f"Waiting for CDP context/pages... ({i+1}/30)")
+                    if i % 10 == 0:
+                        logger.info(f"Waiting for Electron window... ({i+1}/60)")
                     await asyncio.sleep(0.5)
                 
                 if browser_or_context.contexts:
@@ -192,44 +198,52 @@ class LocalChromiumBrowser(Browser):
         return pages
 
     async def _get_shell_page(self) -> Optional[Page]:
-        """Find the Electron Shell Page (Main Window) which exposes window.electron."""
-        # Iterate through all session contexts to find the shell
+        """Find the Electron Shell Page. Uses cache for speed."""
+        # Return cached if still valid
+        if self._cached_shell_page:
+            try:
+                # Quick check if page is still open
+                if not self._cached_shell_page.is_closed():
+                    return self._cached_shell_page
+            except:
+                pass
+            self._cached_shell_page = None
+        
+        # Find and cache
         for session in self._sessions.values():
             if not session.context:
                 continue
             for page in session.context.pages:
                 try:
-                    is_shell = await page.evaluate("!!window.electron")
+                    is_shell = await page.evaluate("!!window.electron", timeout=1000)
                     if is_shell:
+                        self._cached_shell_page = page
                         return page
-                except Exception:
+                except:
                     continue
         return None
 
     async def _get_active_content_page(self, shell_page: Page) -> Optional[Page]:
-        """Find the Playwright Page corresponding to the Active Tab in Electron."""
+        """Find the active content page. Fast path using URL match."""
         try:
-            # 1. Get active tab URL from Shell
-            active_tab_info = await shell_page.evaluate("window.electron.tabs.list().then(tabs => tabs.find(t => t.isActive))")
-            if not active_tab_info:
+            # Get active tab URL
+            target_url = await shell_page.evaluate(
+                "window.electron.tabs.list().then(tabs => (tabs.find(t => t.isActive) || {}).url)",
+                timeout=2000
+            )
+            if not target_url:
                 return None
             
-            target_url = active_tab_info.get("url")
-            
-            # 2. Find matching page in all session contexts
-            # We skip the shell page itself
+            # Find matching page
             for session in self._sessions.values():
                 if not session.context:
                     continue
                 for page in session.context.pages:
-                    if page == shell_page:
-                        continue
-                    if page.url == target_url:
+                    if page != shell_page and page.url == target_url:
                         return page
-            
             return None
         except Exception as e:
-            logger.error(f"Error finding active content page: {e}")
+            logger.error(f"Error finding content page: {e}")
             return None
 
     # --- App-Aware Action Overrides ---
@@ -343,3 +357,39 @@ class LocalChromiumBrowser(Browser):
             return {"status": "success", "content": [{"text": f"Evaluation result: {result}"}]}
         except Exception as e:
             return {"status": "error", "content": [{"text": f"Evaluate failed: {str(e)}"}]}
+
+    async def _async_screenshot(self, action: ScreenshotAction) -> Dict[str, Any]:
+        """Take screenshot of active CONTENT page. Uses JPEG for speed."""
+        import base64
+        
+        shell = await self._get_shell_page()
+        if not shell:
+            return {"status": "error", "content": [{"text": "Cannot screenshot: Shell page not found."}]}
+        
+        page = await self._get_active_content_page(shell)
+        if not page:
+            return {"status": "error", "content": [{"text": "Cannot screenshot: No active content page. Navigate to a website first."}]}
+
+        try:
+            # JPEG at 70% quality - fast and readable by the agent
+            screenshot_bytes = await page.screenshot(type="jpeg", quality=70, timeout=5000)
+            
+            # Save to file if requested
+            if action.path:
+                screenshots_dir = os.getenv("STRANDS_BROWSER_SCREENSHOTS_DIR", "screenshots")
+                os.makedirs(screenshots_dir, exist_ok=True)
+                path = os.path.join(screenshots_dir, action.path) if not os.path.isabs(action.path) else action.path
+                with open(path, "wb") as f:
+                    f.write(screenshot_bytes)
+            
+            b64_data = base64.b64encode(screenshot_bytes).decode("utf-8")
+            return {
+                "status": "success",
+                "content": [
+                    {"image": {"format": "jpeg", "source": {"bytes": b64_data}}},
+                    {"text": f"Screenshot ({len(screenshot_bytes) // 1024} KB)"}
+                ]
+            }
+        except Exception as e:
+            logger.error(f"Screenshot failed: {e}")
+            return {"status": "error", "content": [{"text": f"Screenshot failed: {str(e)}"}]}

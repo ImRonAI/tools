@@ -374,8 +374,13 @@ class Browser(ABC):
             return {"status": "error", "content": [{"text": "Error: No active page for session"}]}
 
         try:
-            await page.goto(action.url)
-            await page.wait_for_load_state("networkidle")
+            await page.goto(action.url, timeout=30000)  # 30s timeout for initial load
+            # Use domcontentloaded instead of networkidle - networkidle hangs forever
+            # on modern sites with constant network activity (analytics, ads, websockets)
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=5000)
+            except PlaywrightTimeoutError:
+                logger.debug("domcontentloaded timeout - page may still be loading dynamic content")
             return {"status": "success", "content": [{"text": f"Navigated to {action.url}"}]}
         except Exception as e:
             error_str = str(e)
@@ -662,8 +667,7 @@ class Browser(ABC):
             return {"status": "error", "content": [{"text": "Error: No active page for session"}]}
 
         try:
-            await page.reload()
-            await page.wait_for_load_state("networkidle")
+            await page.reload(timeout=30000)
             return {"status": "success", "content": [{"text": "Page refreshed"}]}
         except Exception as e:
             logger.debug("exception=<%s> | refresh action failed", str(e))
@@ -685,8 +689,7 @@ class Browser(ABC):
             return {"status": "error", "content": [{"text": "Error: No active page for session"}]}
 
         try:
-            await page.go_back()
-            await page.wait_for_load_state("networkidle")
+            await page.go_back(timeout=30000)
             return {"status": "success", "content": [{"text": "Navigated back"}]}
         except Exception as e:
             logger.debug("exception=<%s> | back action failed", str(e))
@@ -708,8 +711,7 @@ class Browser(ABC):
             return {"status": "error", "content": [{"text": "Error: No active page for session"}]}
 
         try:
-            await page.go_forward()
-            await page.wait_for_load_state("networkidle")
+            await page.go_forward(timeout=30000)
             return {"status": "success", "content": [{"text": "Navigated forward"}]}
         except Exception as e:
             logger.debug("exception=<%s> | forward action failed", str(e))
