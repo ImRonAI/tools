@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 # Constants for resource management
-MAX_THREADS = 10
+# Constants for resource management
 MESSAGE_PROCESSING_DELAY = 0.1  # seconds
 MAX_QUEUE_SIZE = 1000
 
@@ -162,7 +162,8 @@ class AgentGraph:
         self.nodes = {}
         self.tool_context = tool_context
         self.channel = f"agent_graph_{graph_id}"
-        self.thread_pool = ThreadPoolExecutor(max_workers=MAX_THREADS)
+        self.channel = f"agent_graph_{graph_id}"
+        self.thread_pool = None
         self.lock = Lock()
 
     def add_node(self, node_id: str, role: str, system_prompt: str):
@@ -182,6 +183,11 @@ class AgentGraph:
         try:
             # Start processing threads for all nodes using thread pool
             with self.lock:
+                # Dynamic sizing: ensure we have one thread per node
+                # Use at least 1 worker even if no nodes to prevent errors
+                worker_count = max(1, len(self.nodes))
+                self.thread_pool = ThreadPoolExecutor(max_workers=worker_count)
+
                 for node in self.nodes.values():
                     node.thread = self.thread_pool.submit(node.process_messages, self.tool_context, self.channel)
         except Exception as e:
@@ -196,7 +202,9 @@ class AgentGraph:
                     node.is_running = False
 
             # Shutdown thread pool
-            self.thread_pool.shutdown(wait=True)
+            if self.thread_pool:
+                self.thread_pool.shutdown(wait=True)
+                self.thread_pool = None
         except Exception as e:
             logger.error(f"Error stopping graph {self.graph_id}: {str(e)}")
             raise

@@ -250,7 +250,7 @@ async def perplexity_search_api(
     return_images: bool = False,
     return_videos: bool = False,
     include_raw_results: bool = False,
-    model: str = "sonar-pro",
+    model: str = "sonar",
 ) -> Dict[str, Any]:
     """
     Execute Perplexity Search API requests with optional advanced filtering and media enrichment.

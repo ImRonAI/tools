@@ -243,15 +243,15 @@ class WorkflowManager:
             self._load_all_workflows()
             self.initialized = True
 
-    def __del__(self):
-        self.cleanup()
 
     def cleanup(self):
         """Cleanup observers and executors."""
         if self._observer:
             try:
                 self._observer.stop()
-                self._observer.join()
+                self._observer.join(timeout=2.0)  # Don't hang forever
+                if self._observer.is_alive():
+                    logger.warning("File watcher thread did not stop cleanly")
                 self._observer = None
                 self._watch_paths.clear()
             except BaseException:
@@ -259,6 +259,7 @@ class WorkflowManager:
 
         if hasattr(self, "task_executor"):
             self.task_executor.shutdown()
+
 
     def _start_file_watching(self):
         """Initialize and start the file system observer."""
@@ -632,6 +633,41 @@ class WorkflowManager:
                     new_futures = self.task_executor.submit_tasks(tasks_to_submit)
                     active_futures.update(new_futures)
                     logger.debug(f"📤 Submitted {len(tasks_to_submit)} tasks for execution")
+
+                # STALL DETECTION: If no tasks are running and no new tasks can be started, but we aren't done...
+                if not active_futures and not tasks_to_submit:
+                    # Check if we have pending tasks that are blocked
+                    remaining_pending = [
+                        t_id for t_id, t_res in workflow["task_results"].items() 
+                        if t_res["status"] == "pending"
+                    ]
+                    
+                    if remaining_pending:
+                        logger.warning(f"Workflow stalled with {len(remaining_pending)} pending tasks. Likely dependency failure.")
+                        
+                        # Mark all remaining tasks as skipped/failed
+                        for t_id in remaining_pending:
+                            # Find which dependency failed to give good error message
+                            task_def = next((t for t in workflow["tasks"] if t["task_id"] == t_id), {})
+                            failed_deps = []
+                            if task_def and task_def.get("dependencies"):
+                                for dep in task_def["dependencies"]:
+                                    if workflow["task_results"].get(dep, {}).get("status") == "error":
+                                        failed_deps.append(dep)
+                            
+                            reason = f"Dependency failed: {', '.join(failed_deps)}" if failed_deps else "Workflow aborted due to upstream failure"
+                            
+                            workflow["task_results"][t_id] = {
+                                **workflow["task_results"][t_id],
+                                "status": "skipped",
+                                "result": [{"text": f"⛔ Skipped: {reason}"}],
+                                "completed_at": datetime.now(timezone.utc).isoformat(),
+                            }
+                            # Add to completed so loop finishes
+                            completed_tasks.add(t_id)
+                        
+                        # Break the loop since we've handled all remaining tasks
+                        break
 
                 # Wait for any task to complete
                 if active_futures:

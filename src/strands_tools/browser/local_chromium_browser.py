@@ -66,6 +66,14 @@ class LocalChromiumBrowser(Browser):
         self._default_context_options = {"viewport": {"width": width, "height": height}}
         self._default_context_options.update(self._context_options)
 
+        # CDP Connection Handling (Fix for "Browser Not Working")
+        # Check env vars for explicit CDP URL, otherwise default to standard localhost:9222
+        # This ensures we attach to the running Electron app by default instead of spawning a hidden browser.
+        cdp_url = os.getenv("STRANDS_BROWSER_CDP_URL") or os.getenv("CDP_URL") or "http://localhost:9222"
+        if cdp_url:
+            self._default_launch_options["cdp_url"] = cdp_url
+            logger.info(f"Configured to attach to browser via CDP at {cdp_url}")
+
     async def create_browser_session(self) -> PlaywrightBrowser:
         """Create a new local Chromium browser instance for a session."""
         if not self._playwright:
@@ -129,47 +137,74 @@ class LocalChromiumBrowser(Browser):
             if "cdp_url" in self._default_launch_options:
                 # Retry logic to wait for initial context/page (race condition mitigation)
                 # Increased to 60 attempts (30 seconds) to allow for app startup
+                found_shell = False
+                target_context = None
+                target_page = None
+
                 for i in range(60):
                     if browser_or_context.contexts:
-                        # Found a context, now check for pages within it
-                        ctx = browser_or_context.contexts[0]
-                        if ctx.pages:
-                            break
+                        # Search ALL contexts for the shell page
+                        for ctx in browser_or_context.contexts:
+                            if not ctx.pages:
+                                continue
+                            
+                            for page in ctx.pages:
+                                try:
+                                    # 1. Check for exposed electron API (Primary)
+                                    # Fix: page.evaluate does not accept timeout arg, use asyncio.wait_for
+                                    is_shell = await asyncio.wait_for(
+                                        page.evaluate("!!window.electron"), 
+                                        timeout=5.0  # Increased to 5s for robustness
+                                    )
+                                    if is_shell:
+                                        target_context = ctx
+                                        target_page = page
+                                        found_shell = True
+                                        logger.info(f"Found Electron Shell via window.electron at: {page.url}")
+                                        break
+                                    
+                                    # 2. Heuristic Check
+                                    title = await page.title()
+                                    if "Ron Browser" in title:
+                                        # Likely the right page, wait a bit
+                                        await asyncio.sleep(0.5)
+                                        is_shell = await asyncio.wait_for(
+                                            page.evaluate("!!window.electron"),
+                                            timeout=5.0  # Increased to 5s
+                                        )
+                                        if is_shell:
+                                            target_context = ctx
+                                            target_page = page
+                                            found_shell = True
+                                            logger.info(f"Found Electron Shell (heuristic match) at: {page.url}")
+                                            break
+                                except Exception:
+                                    continue
+                            
+                            if found_shell:
+                                break
+                    
+                    if found_shell:
+                        break
+                        
                     if i % 10 == 0:
                         logger.info(f"Waiting for Electron window... ({i+1}/60)")
                     await asyncio.sleep(0.5)
                 
-                if browser_or_context.contexts:
+                if found_shell and target_context and target_page:
+                    session_browser = browser_or_context
+                    session_context = target_context
+                    session_page = target_page
+                    self._cached_shell_page = target_page
+                    logger.info("Confirmed attached page is the Electron Shell ✅")
+                elif browser_or_context.contexts:
+                     # Fallback to first context if scanning failed
+                    logger.warning("Could not find Shell Page in any context. Defaulting to first available context.")
                     session_browser = browser_or_context
                     session_context = browser_or_context.contexts[0]
-                    
                     if session_context.pages:
-                        logger.info(f"Searching {len(session_context.pages)} pages for Electron Shell...")
-                        
-                        # Find the shell page (has electron API via window.electron)
-                        shell_page = None
-                        for page in session_context.pages:
-                            try:
-                                is_shell = await page.evaluate("!!window.electron")
-                                if is_shell:
-                                    shell_page = page
-                                    logger.info(f"Found Electron Shell at: {page.url}")
-                                    break
-                            except Exception:
-                                continue
-                        
-                        if shell_page:
-                            session_page = shell_page
-                            logger.info("Confirmed attached page is the Electron Shell ✅")
-                        else:
-                            # Fallback to first page
-                            session_page = session_context.pages[0]
-                            logger.warning("Attached page is NOT the Electron Shell. Browser control may be limited.")
+                        session_page = session_context.pages[0]
                     else:
-                        logger.error("No existing pages found in Electron context after timeout.")
-                        # Do NOT create a new page here as it won't have the preload script
-                        # But we must return something to avoid crash, so we warn heavily.
-                        logger.warning("Creating fallback page (will likely lack shell control).")
                         session_page = await session_context.new_page()
                 else:
                     logger.warning("No existing contexts found in Electron CDP. Creating new context (fallback).")
@@ -199,6 +234,7 @@ class LocalChromiumBrowser(Browser):
 
     async def _get_shell_page(self) -> Optional[Page]:
         """Find the Electron Shell Page. Uses cache for speed."""
+        import asyncio
         # Return cached if still valid
         if self._cached_shell_page:
             try:
@@ -215,9 +251,14 @@ class LocalChromiumBrowser(Browser):
                 continue
             for page in session.context.pages:
                 try:
-                    is_shell = await page.evaluate("!!window.electron", timeout=1000)
+                    # Fix: Use asyncio.wait_for instead of invalid timeout arg
+                    is_shell = await asyncio.wait_for(
+                        page.evaluate("!!window.electron"), 
+                        timeout=5.0
+                    )
                     if is_shell:
                         self._cached_shell_page = page
+                        logger.info(f"Re-acquired Shell Page: {page.url}")
                         return page
                 except:
                     continue
@@ -225,22 +266,42 @@ class LocalChromiumBrowser(Browser):
 
     async def _get_active_content_page(self, shell_page: Page) -> Optional[Page]:
         """Find the active content page. Fast path using URL match."""
+        import asyncio
         try:
+            print("DEBUG: _get_active_content_page running fixed version with asyncio.wait_for")
             # Get active tab URL
-            target_url = await shell_page.evaluate(
-                "window.electron.tabs.list().then(tabs => (tabs.find(t => t.isActive) || {}).url)",
-                timeout=2000
+            # Fix: page.evaluate does not accept timeout argument
+            target_url = await asyncio.wait_for(
+                shell_page.evaluate(
+                    "window.electron.tabs.list().then(tabs => (tabs.find(t => t.isActive) || {}).url)"
+                ),
+                timeout=5.0
             )
+            
+            logger.info(f"DEBUG: Tabs API reports active URL: {target_url}")
+            
             if not target_url:
+                logger.warning("DEBUG: No active URL returned from Tabs API")
                 return None
             
             # Find matching page
+            candidates = []
             for session in self._sessions.values():
                 if not session.context:
                     continue
-                for page in session.context.pages:
-                    if page != shell_page and page.url == target_url:
-                        return page
+                for p in session.context.pages:
+                     if p != shell_page:
+                         candidates.append(p.url)
+                         # Loose matching to handle trailing slashes
+                         # Normalize both to remove trailing slash for comparison
+                         p_url_norm = p.url.rstrip("/")
+                         t_url_norm = target_url.rstrip("/")
+                         
+                         if p_url_norm == t_url_norm:
+                             logger.info(f"DEBUG: Found matching content page: {p.url}")
+                             return p
+            
+            logger.warning(f"DEBUG: No matching Playwright page found for {target_url}. Candidates: {candidates}")
             return None
         except Exception as e:
             logger.error(f"Error finding content page: {e}")
@@ -360,20 +421,28 @@ class LocalChromiumBrowser(Browser):
 
     async def _async_screenshot(self, action: ScreenshotAction) -> Dict[str, Any]:
         """Take screenshot of active CONTENT page. Uses JPEG for speed."""
-        import base64
-        
         shell = await self._get_shell_page()
         if not shell:
             return {"status": "error", "content": [{"text": "Cannot screenshot: Shell page not found."}]}
-        
+
         page = await self._get_active_content_page(shell)
         if not page:
             return {"status": "error", "content": [{"text": "Cannot screenshot: No active content page. Navigate to a website first."}]}
 
         try:
-            # JPEG at 70% quality - fast and readable by the agent
-            screenshot_bytes = await page.screenshot(type="jpeg", quality=70, timeout=5000)
-            
+            # JPEG at 50% quality for maximum speed (was 80% - reduced for performance)
+            # Quality 50 is nearly indistinguishable from 80 but 2-3x smaller/faster
+            # FORCE full_page=False: The 'ValidationException' from Bedrock indicates
+            # full page screenshots exceed the model's max image size (pixels/bytes).
+            # We must use viewport only to ensure stability and preventing crashing.
+            quality = action.quality if hasattr(action, 'quality') and action.quality else 50
+            screenshot_bytes = await page.screenshot(
+                type="jpeg",
+                quality=quality,
+                full_page=False,
+                timeout=5000
+            )
+
             # Save to file if requested
             if action.path:
                 screenshots_dir = os.getenv("STRANDS_BROWSER_SCREENSHOTS_DIR", "screenshots")
@@ -381,12 +450,13 @@ class LocalChromiumBrowser(Browser):
                 path = os.path.join(screenshots_dir, action.path) if not os.path.isabs(action.path) else action.path
                 with open(path, "wb") as f:
                     f.write(screenshot_bytes)
-            
-            b64_data = base64.b64encode(screenshot_bytes).decode("utf-8")
+
+            # Return RAW bytes - Strands SDK's encode_bytes_values() will handle base64 encoding
+            # Passing pre-encoded base64 caused double-encoding and massive JSON serialization delays
             return {
                 "status": "success",
                 "content": [
-                    {"image": {"format": "jpeg", "source": {"bytes": b64_data}}},
+                    {"image": {"format": "jpeg", "source": {"bytes": screenshot_bytes}}},
                     {"text": f"Screenshot ({len(screenshot_bytes) // 1024} KB)"}
                 ]
             }

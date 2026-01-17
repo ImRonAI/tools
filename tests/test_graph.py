@@ -64,13 +64,18 @@ def mock_graph_builder():
         "reporter": MagicMock(),
     }
 
-    # Mock agent results for each node
+    # Mock agent results for each node - using correct Strands SDK NodeResult structure
     for node_id, node_result in mock_execution_result.results.items():
-        mock_agent_result = MagicMock()
-        mock_agent_result.__str__ = MagicMock(return_value=f"Result from {node_id}")
-        node_result.get_agent_results.return_value = [mock_agent_result]
+        # Create mock content block with text attribute
+        mock_content_block = MagicMock()
+        mock_content_block.text = f"Result from {node_id}"
+        # Create mock result with content list
+        mock_result = MagicMock()
+        mock_result.content = [mock_content_block]
+        node_result.result = mock_result
 
-    mock_graph.execute.return_value = mock_execution_result
+    # Graph is called directly as a callable
+    mock_graph.return_value = mock_execution_result
 
     return mock_builder
 
@@ -388,11 +393,16 @@ def test_graph_execution_with_failure(mock_parent_agent, mock_graph_builder, sam
     mock_execution_result.results = {"researcher": MagicMock(), "analyst": MagicMock()}
 
     for node_id, node_result in mock_execution_result.results.items():
-        mock_agent_result = MagicMock()
-        mock_agent_result.__str__ = MagicMock(return_value=f"Result from {node_id}")
-        node_result.get_agent_results.return_value = [mock_agent_result]
+        # Create mock content block with text attribute
+        mock_content_block = MagicMock()
+        mock_content_block.text = f"Result from {node_id}"
+        # Create mock result with content list
+        mock_result = MagicMock()
+        mock_result.content = [mock_content_block]
+        node_result.result = mock_result
 
-    mock_graph_builder.build.return_value.execute.return_value = mock_execution_result
+    # Graph is called directly as a callable
+    mock_graph_builder.build.return_value.return_value = mock_execution_result
 
     with (
         patch("strands_tools.graph.GraphBuilder", return_value=mock_graph_builder),

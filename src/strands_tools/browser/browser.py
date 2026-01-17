@@ -188,14 +188,6 @@ class Browser(ABC):
             await self._async_cleanup()
             self._started = False
 
-    def __del__(self):
-        """Cleanup: Clear platform resources when tool is destroyed."""
-        try:
-            logger.debug("browser tool destructor called - cleaning up platform")
-            self._cleanup()
-            logger.debug("platform cleanup completed successfully")
-        except Exception as e:
-            logger.debug("exception=<%s> | platform cleanup during destruction skipped", str(e))
 
     @abstractmethod
     async def start_platform(self) -> None:
@@ -633,20 +625,47 @@ class Browser(ABC):
             return {"status": "error", "content": [{"text": "Error: No active page for session"}]}
 
         try:
-            screenshots_dir = os.getenv("STRANDS_BROWSER_SCREENSHOTS_DIR", "screenshots")
-            os.makedirs(screenshots_dir, exist_ok=True)
+            # Build screenshot options
+            screenshot_options = {
+                "type": action.format or "jpeg",
+                "full_page": action.full_page or False
+            }
 
-            if not action.path:
-                filename = f"screenshot_{int(time.time())}.png"
-                path = os.path.join(screenshots_dir, filename)
-            elif not os.path.isabs(action.path):
-                path = os.path.join(screenshots_dir, action.path)
-            else:
-                path = action.path
+            # Add quality for JPEG
+            if screenshot_options["type"] == "jpeg":
+                screenshot_options["quality"] = action.quality or 50
 
-            logger.debug(f"About to take screenshot with page: {page}")
-            await page.screenshot(path=path)
-            return {"status": "success", "content": [{"text": f"Screenshot saved as {path}"}]}
+            logger.debug(f"About to take screenshot with options: {screenshot_options}")
+
+            # Capture to MEMORY (no path parameter) - returns bytes
+            screenshot_bytes = await page.screenshot(**screenshot_options)
+
+            # OPTIONALLY save to file if path provided
+            saved_msg = ""
+            if action.path:
+                screenshots_dir = os.getenv("STRANDS_BROWSER_SCREENSHOTS_DIR", "screenshots")
+                os.makedirs(screenshots_dir, exist_ok=True)
+                full_path = os.path.join(screenshots_dir, action.path) if not os.path.isabs(action.path) else action.path
+
+                with open(full_path, 'wb') as f:
+                    f.write(screenshot_bytes)
+
+                saved_msg = f"Screenshot saved to {full_path}. "
+                logger.debug(f"Screenshot saved to file: {full_path}")
+
+            # Return image in response (Anthropic/Strands format)
+            return {
+                "status": "success",
+                "content": [
+                    {"text": f"{saved_msg}Screenshot captured successfully."},
+                    {
+                        "image": {
+                            "format": screenshot_options["type"],
+                            "source": {"bytes": screenshot_bytes}
+                        }
+                    }
+                ]
+            }
         except Exception as e:
             logger.debug("exception=<%s> | screenshot action failed", str(e))
             return {"status": "error", "content": [{"text": f"Error: {str(e)}"}]}

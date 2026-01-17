@@ -2,18 +2,9 @@
 Crontab manager for scheduling tasks, with special support for Strands agent jobs.
 
 Simple, direct interface to the system's crontab with helpful guidance in documentation.
-
-Platform Requirements:
-- Unix-like systems (Linux, macOS): Full crontab support
-- Windows: Not supported - use Task Scheduler (schtasks) or Windows Task Scheduler
-- WSL (Windows Subsystem for Linux): Full crontab support within WSL environment
-
-The tool will gracefully detect the platform and provide appropriate alternatives if crontab
-is not available on the current system.
 """
 
 import logging
-import platform
 import re
 import subprocess
 from typing import Any, Dict, Optional
@@ -65,60 +56,6 @@ def cron(
     Returns:
         Dict containing status and response content
     """
-    # Platform check for crontab compatibility
-    current_platform = platform.system().lower()
-    if current_platform == "windows":
-        # Check if running in WSL
-        try:
-            with open("/proc/version", "r") as f:
-                if "microsoft" in f.read().lower():
-                    # Running in WSL, crontab might be available
-                    pass
-        except FileNotFoundError:
-            # Not in WSL, provide Windows alternatives
-            return {
-                "status": "error",
-                "content": [
-                    {
-                        "text": (
-                            "⚠️ Platform Incompatibility: Crontab is not available on Windows.\n\n"
-                            "Alternative scheduling options for Windows:\n"
-                            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                            "1. Windows Task Scheduler (GUI or schtasks command):\n"
-                            "   Example: schtasks /create /tn \"MyTask\" /tr \"python script.py\" /sc daily /st 09:00\n\n"
-                            "2. Python scheduling libraries:\n"
-                            "   - schedule: pip install schedule\n"
-                            "   - APScheduler: pip install apscheduler\n\n"
-                            "3. WSL (Windows Subsystem for Linux):\n"
-                            "   Install WSL and run this tool within the Linux environment\n\n"
-                            f"Current platform: {platform.system()} {platform.release()}\n"
-                            f"Architecture: {platform.machine()}"
-                        )
-                    }
-                ],
-            }
-
-    # Check if crontab is available on the system
-    try:
-        subprocess.run(["which", "crontab"], capture_output=True, check=True)
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return {
-            "status": "error",
-            "content": [
-                {
-                    "text": (
-                        "Error: crontab command not found on this system.\n\n"
-                        "This tool requires crontab to be installed and accessible.\n"
-                        f"Current platform: {platform.system()} {platform.release()}\n\n"
-                        "Please ensure crontab is installed:\n"
-                        "- On Ubuntu/Debian: sudo apt-get install cron\n"
-                        "- On RHEL/CentOS: sudo yum install cronie\n"
-                        "- On macOS: crontab should be pre-installed"
-                    )
-                }
-            ],
-        }
-
     try:
         if action.lower() == "list":
             return list_jobs()

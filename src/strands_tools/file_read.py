@@ -8,16 +8,17 @@ like diffs and version history analysis.
 
 Key Features:
 
-1. Simplified Reading Modes (5 primary modes):
-
-   ESSENTIAL:
-   • read: Display file contents (default mode - replaces 'view')
-   • search: Pattern searching with context highlighting
+1. Multiple Reading Modes:
+   • view: Display full file contents with syntax highlighting
+   • find: List matching files with directory tree visualization
    • lines: Show specific line ranges with context
-
-   ANALYSIS:
+   • chunk: Read byte chunks from specific offsets
+   • search: Pattern searching with context highlighting
+   • stats: File statistics and metrics
+   • preview: Quick content preview
    • diff: Compare files or directories
-   • stats: File statistics, preview, and metadata (combines stats + preview)
+   • time_machine: View version history
+   • document: Generate Bedrock document blocks
 
 2. Rich Output Display:
    • Syntax highlighting based on file type
@@ -48,16 +49,11 @@ from strands_tools import file_read
 
 agent = Agent(tools=[file_read])
 
-# Read file content with syntax highlighting
-agent.tool.file_read(path="/path/to/file.py", mode="read")
+# View file content with syntax highlighting
+agent.tool.file_read(path="/path/to/file.py", mode="view")
 
-# Search for patterns in files
-agent.tool.file_read(
-    path="/path/to/file.txt",
-    mode="search",
-    search_pattern="function",
-    context_lines=3
-)
+# List files matching a pattern
+agent.tool.file_read(path="/path/to/project/*.py", mode="find")
 
 # Read specific line ranges
 agent.tool.file_read(
@@ -116,11 +112,11 @@ from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 from rich.tree import Tree
-from strands import tool
 from strands.types.media import DocumentContent
 from strands.types.tools import (
     ToolResult,
     ToolResultContent,
+    ToolUse,
 )
 
 from strands_tools.utils import console_util
@@ -234,6 +230,133 @@ def split_path_list(path: str) -> List[str]:
     """
     paths = [p.strip() for p in path.split(",") if p.strip()]
     return [expanduser(p) for p in paths]
+
+
+TOOL_SPEC = {
+    "name": "file_read",
+    "description": (
+        "File reading tool with search capabilities, various reading modes, and document mode support "
+        "for Bedrock compatibility.\n\n"
+        "Features:\n"
+        "1. Multi-file support (comma-separated paths)\n"
+        "2. Full document format support (pdf, doc, docx, etc.)\n"
+        "3. Search and filtering capabilities\n"
+        "4. Version control integration\n"
+        "5. Document block generation for Bedrock\n\n"
+        "Modes:\n"
+        "- find: List matching files\n"
+        "- view: Display file contents\n"
+        "- lines: Show specific line ranges\n"
+        "- chunk: Read byte chunks\n"
+        "- search: Pattern searching\n"
+        "- stats: File statistics\n"
+        "- preview: Quick content preview\n"
+        "- diff: Compare files/directories\n"
+        "- time_machine: Version history\n"
+        "- document: Generate Bedrock document blocks"
+    ),
+    "inputSchema": {
+        "json": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": (
+                        "Path(s) to file(s). For multiple files, use comma-separated list: "
+                        "'file1.txt,file2.md,data/*.json'"
+                    ),
+                },
+                "mode": {
+                    "type": "string",
+                    "description": (
+                        "Reading mode: find, view, lines, chunk, search, stats, preview, diff, time_machine, document"
+                    ),
+                    "enum": [
+                        "find",
+                        "view",
+                        "lines",
+                        "chunk",
+                        "search",
+                        "stats",
+                        "preview",
+                        "diff",
+                        "time_machine",
+                        "document",
+                    ],
+                },
+                "format": {
+                    "type": "string",
+                    "description": "Document format for document mode (autodetected if not specified)",
+                    "enum": [
+                        "pdf",
+                        "csv",
+                        "doc",
+                        "docx",
+                        "xls",
+                        "xlsx",
+                        "html",
+                        "txt",
+                        "md",
+                    ],
+                },
+                "neutral_name": {
+                    "type": "string",
+                    "description": "Neutral document name to prevent prompt injection (default: filename-UUID)",
+                },
+                "comparison_path": {
+                    "type": "string",
+                    "description": "Second file/directory path for diff mode comparison",
+                },
+                "diff_type": {
+                    "type": "string",
+                    "description": "Type of diff view (unified diff)",
+                    "enum": ["unified"],
+                    "default": "unified",
+                },
+                "git_history": {
+                    "type": "boolean",
+                    "description": "Whether to use git history for time_machine mode",
+                    "default": True,
+                },
+                "num_revisions": {
+                    "type": "integer",
+                    "description": "Number of revisions to show in time_machine mode",
+                    "default": 5,
+                },
+                "start_line": {
+                    "type": "integer",
+                    "description": "Starting line number (for lines mode)",
+                },
+                "end_line": {
+                    "type": "integer",
+                    "description": "Ending line number (for lines mode)",
+                },
+                "chunk_size": {
+                    "type": "integer",
+                    "description": "Size of chunk in bytes (for chunk mode)",
+                },
+                "chunk_offset": {
+                    "type": "integer",
+                    "description": "Offset in bytes (for chunk mode)",
+                },
+                "search_pattern": {
+                    "type": "string",
+                    "description": "Pattern to search for (for search mode)",
+                },
+                "context_lines": {
+                    "type": "integer",
+                    "description": "Number of context lines around search results",
+                },
+                "recursive": {
+                    "type": "boolean",
+                    "description": "Search recursively in subdirectories (default: true)",
+                    "default": True,
+                },
+            },
+            "required": ["path", "mode"],
+        }
+    },
+}
 
 
 def find_files(console: Console, pattern: str, recursive: bool = True) -> List[str]:
@@ -809,24 +932,7 @@ def time_machine_view(file_path: str, use_git: bool = True, num_revisions: int =
         raise Exception(f"Error in time machine view: {str(e)}") from e
 
 
-@tool
-def file_read(
-    path: str,
-    mode: str,
-    format: Optional[str] = None,
-    neutral_name: Optional[str] = None,
-    comparison_path: Optional[str] = None,
-    diff_type: str = "unified",
-    git_history: bool = True,
-    num_revisions: int = 5,
-    start_line: Optional[int] = None,
-    end_line: Optional[int] = None,
-    chunk_size: Optional[int] = None,
-    chunk_offset: Optional[int] = None,
-    search_pattern: Optional[str] = None,
-    context_lines: Optional[int] = None,
-    recursive: bool = True,
-) -> Dict[str, Any]:
+def file_read(tool: ToolUse, **kwargs: Any) -> ToolResult:
     """
     Advanced file reading tool with multiple specialized reading modes.
 
@@ -835,62 +941,87 @@ def file_read(
     like diff comparisons and version history analysis. It handles multiple file paths,
     pattern matching, and can generate document blocks for Bedrock compatibility.
 
+    How It Works:
+    ------------
+    1. Parses the input parameters to determine the requested mode
+    2. Validates the required parameters for that mode
+    3. Finds all files matching the provided path patterns
+    4. Processes each file according to the requested mode
+    5. Formats the results with rich output and appropriate structure
+    6. Returns the results or appropriate error messages
+
     Reading Modes:
+    ------------
+    - find: Lists all files matching the pattern (supports wildcards)
+    - view: Shows full file contents with syntax highlighting
+    - lines: Shows specific line ranges from files
+    - chunk: Reads binary chunks from files at specific offsets
+    - search: Searches for patterns with context highlighting
+    - stats: Displays file statistics like size and line count
+    - preview: Shows a quick preview of file content
+    - diff: Compares two files or directories and shows differences
+    - time_machine: Shows version history from git or filesystem
+    - document: Generates Bedrock document blocks for file content
 
-    ESSENTIAL (most common):
-    - read: Display full file contents (default mode, replaces former 'view')
-    - search: Search for patterns with context (use search_pattern param)
-    - lines: Show specific line ranges (use start_line, end_line params)
-
-    ANALYSIS (specialized):
-    - diff: Compare two files or directories (use comparison_path param)
-    - stats: File statistics with preview (combines former stats + preview)
-
-    LEGACY (deprecated but still supported):
-    - view: Redirects to 'read' mode
-    - preview: Redirects to 'stats' mode
-    - find: Lists matching files (consider using glob patterns instead)
-    - document: Bedrock document blocks (rarely needed)
-    - chunk: Read byte ranges (rarely needed)
-    - time_machine: Git history (rarely needed)
+    Common Usage Scenarios:
+    --------------------
+    - Reading code files with syntax highlighting
+    - Searching for specific patterns in logs or source code
+    - Comparing different versions of files or directories
+    - Analyzing file metadata and statistics
+    - Reading only specific parts of large files
+    - Examining file version history
+    - Preparing file content for Bedrock document processing
 
     Args:
-        path: Path(s) to file(s). For multiple files, use comma-separated list.
-        mode: Reading mode: read, search, lines, diff, stats (legacy: view, preview, find, document, chunk, time_machine)
-        format: Document format for document mode (autodetected if not specified)
-        neutral_name: Neutral document name to prevent prompt injection (default: filename-UUID)
-        comparison_path: Second file/directory path for diff mode comparison
-        diff_type: Type of diff view (unified diff)
-        git_history: Whether to use git history for time_machine mode
-        num_revisions: Number of revisions to show in time_machine mode
-        start_line: Starting line number (for lines mode)
-        end_line: Ending line number (for lines mode)
-        chunk_size: Size of chunk in bytes (for chunk mode)
-        chunk_offset: Offset in bytes (for chunk mode)
-        search_pattern: Pattern to search for (for search mode)
-        context_lines: Number of context lines around search results
-        recursive: Search recursively in subdirectories (default: true)
+        tool: ToolUse object containing the following input fields:
+            - path: Path(s) to file(s). For multiple files, use comma-separated list.
+              Can include wildcards like '*.py' or directories.
+            - mode: Reading mode to use (required)
+            - Additional parameters specific to each mode
+        **kwargs: Additional keyword arguments
 
     Returns:
-        Dictionary containing status and response content
+        ToolResult containing status and response content in the format:
+        {
+            "toolUseId": "<tool_use_id>",
+            "status": "success|error",
+            "content": [{"text": "Response message"}]
+        }
+
+    Notes:
+        - Document mode returns document blocks for Bedrock compatibility
+        - Multiple files can be processed in a single call with comma-separated paths
+        - The tool supports various wildcard patterns for matching multiple files
+        - Document format is auto-detected from file extension or can be specified
+        - For diff mode, both paths must be either files or directories
     """
     console = console_util.create()
 
-    # Get environment variables at runtime for defaults
+    tool_use_id = tool.get("toolUseId", "default-id")
+    tool_input = tool.get("input", {})
+
+    # Get environment variables at runtime
+    file_read_recursive_default = os.getenv("FILE_READ_RECURSIVE_DEFAULT", "true").lower() == "true"
     file_read_context_lines_default = int(os.getenv("FILE_READ_CONTEXT_LINES_DEFAULT", "2"))
     file_read_start_line_default = int(os.getenv("FILE_READ_START_LINE_DEFAULT", "0"))
     file_read_chunk_offset_default = int(os.getenv("FILE_READ_CHUNK_OFFSET_DEFAULT", "0"))
+    file_read_diff_type_default = os.getenv("FILE_READ_DIFF_TYPE_DEFAULT", "unified")
+    file_read_use_git_default = os.getenv("FILE_READ_USE_GIT_DEFAULT", "true").lower() == "true"
+    file_read_num_revisions_default = int(os.getenv("FILE_READ_NUM_REVISIONS_DEFAULT", "5"))
 
     try:
-        # Handle mode redirections for legacy modes
-        mode_redirects = {
-            "view": "read",      # view → read (more intuitive name)
-            "preview": "stats",  # preview → stats (combined functionality)
-        }
-        mode = mode_redirects.get(mode, mode)  # Apply redirections
+        # Validate required parameters
+        if not tool_input.get("path"):
+            raise ValueError("path parameter is required")
+
+        if not tool_input.get("mode"):
+            raise ValueError("mode parameter is required")
 
         # Get input parameters
-        paths = split_path_list(path)  # Handle comma-separated paths
+        mode = tool_input["mode"]
+        paths = split_path_list(tool_input["path"])  # Handle comma-separated paths
+        recursive = tool_input.get("recursive", file_read_recursive_default)
 
         # Find all matching files across all paths
         matching_files = []
@@ -904,6 +1035,7 @@ def file_read(
             error_msg = f"No files found matching pattern(s): {', '.join(paths)}"
             console.print(Panel(escape(error_msg), title="[bold red]Error", border_style="red"))
             return {
+                "toolUseId": tool_use_id,
                 "status": "error",
                 "content": [{"text": error_msg}],
             }
@@ -911,6 +1043,8 @@ def file_read(
         # Special handling for document mode
         if mode == "document":
             try:
+                format = tool_input.get("format")
+                neutral_name = tool_input.get("neutral_name")
 
                 # Create document blocks for each file
                 document_blocks = []
@@ -934,6 +1068,7 @@ def file_read(
                     document_content.append({"document": cast(DocumentContent, doc)})
 
                 return {
+                    "toolUseId": tool_use_id,
                     "status": "success",
                     "content": document_content,
                 }
@@ -942,6 +1077,7 @@ def file_read(
                 error_msg = f"Error in document mode: {str(e)}"
                 console.print(Panel(escape(error_msg), title="[bold red]Error", border_style="red"))
                 return {
+                    "toolUseId": tool_use_id,
                     "status": "error",
                     "content": [{"text": error_msg}],
                 }
@@ -977,6 +1113,7 @@ def file_read(
             )
 
             return {
+                "toolUseId": tool_use_id,
                 "status": "success",
                 "content": [{"text": f"Found {len(matching_files)} files:\n" + "\n".join(matching_files)}],
             }
@@ -984,7 +1121,7 @@ def file_read(
         # Process each file for other modes
         for file_path in matching_files:
             try:
-                if mode == "read" or mode == "view":  # 'view' kept for compatibility
+                if mode == "view":
                     try:
                         with open(file_path, "r") as f:
                             content = f.read()
@@ -1002,7 +1139,30 @@ def file_read(
                         console.print(Panel(escape(error_msg), title="[bold red]Error", border_style="red"))
                         response_content.append({"text": error_msg})
 
-                elif mode == "stats" or mode == "preview":  # Combined stats + preview
+                elif mode == "preview":
+                    stats = get_file_stats(console, file_path)
+                    with open(file_path, "r") as f:
+                        content = "".join(f.readlines()[:50])
+
+                    preview_panel = create_rich_panel(
+                        content,
+                        (
+                            f"📄 Preview: {os.path.basename(file_path)} "
+                            f"(first 50 lines of {stats['line_count']} total lines)"
+                        ),
+                        file_path,
+                    )
+                    console.print(preview_panel)
+                    response_content.append(
+                        {
+                            "text": (
+                                f"File: {file_path}\nSize: {stats['size_human']}\n"
+                                f"Total Lines: {stats['line_count']}\n\nPreview:\n{content}"
+                            )
+                        }
+                    )
+
+                elif mode == "stats":
                     stats = get_file_stats(console, file_path)
                     response_content.append({"text": json.dumps(stats, indent=2)})
 
@@ -1010,8 +1170,8 @@ def file_read(
                     lines = read_file_lines(
                         console,
                         file_path,
-                        start_line if start_line is not None else file_read_start_line_default,
-                        end_line,
+                        tool_input.get("start_line", file_read_start_line_default),
+                        tool_input.get("end_line"),
                     )
                     response_content.append({"text": "".join(lines)})
 
@@ -1019,8 +1179,8 @@ def file_read(
                     content = read_file_chunk(
                         console,
                         file_path,
-                        chunk_size if chunk_size is not None else 1024,
-                        chunk_offset if chunk_offset is not None else file_read_chunk_offset_default,
+                        tool_input.get("chunk_size", 1024),
+                        tool_input.get("chunk_offset", file_read_chunk_offset_default),
                     )
                     response_content.append({"text": content})
 
@@ -1028,19 +1188,20 @@ def file_read(
                     results = search_file(
                         console,
                         file_path,
-                        search_pattern if search_pattern is not None else "",
-                        context_lines if context_lines is not None else file_read_context_lines_default,
+                        tool_input.get("search_pattern", ""),
+                        tool_input.get("context_lines", file_read_context_lines_default),
                     )
                     response_content.extend([{"text": r["context"]} for r in results])
 
                 elif mode == "diff":
+                    comparison_path = tool_input.get("comparison_path")
                     if not comparison_path:
                         raise ValueError("comparison_path is required for diff mode")
 
                     diff_output = create_diff(
                         file_path,
                         os.path.expanduser(comparison_path),
-                        diff_type,
+                        tool_input.get("diff_type", file_read_diff_type_default),
                     )
 
                     diff_panel = create_rich_panel(
@@ -1054,8 +1215,8 @@ def file_read(
                 elif mode == "time_machine":
                     history_output = time_machine_view(
                         file_path,
-                        git_history,
-                        num_revisions,
+                        tool_input.get("git_history", file_read_use_git_default),
+                        tool_input.get("num_revisions", file_read_num_revisions_default),
                     )
 
                     history_panel = create_rich_panel(
@@ -1072,6 +1233,7 @@ def file_read(
                 response_content.append({"text": error_msg})
 
         return {
+            "toolUseId": tool_use_id,
             "status": "success",
             "content": response_content,
         }
@@ -1080,6 +1242,7 @@ def file_read(
         error_msg = f"Error: {str(e)}"
         console.print(Panel(escape(error_msg), title="[bold red]Error", border_style="red"))
         return {
+            "toolUseId": tool_use_id,
             "status": "error",
             "content": [cast(ToolResultContent, {"text": error_msg})],
         }

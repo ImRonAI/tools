@@ -167,7 +167,10 @@ class ScreenshotAction(BaseModel):
 
     type: Literal["screenshot"] = Field(description="Take a screenshot")
     session_name: str = Field(description="Required session name from a previous init_session call")
-    path: Optional[str] = Field(default=None, description="Optional path for screenshot file")
+    path: Optional[str] = Field(default=None, description="Optional path to save screenshot file. If not provided, screenshot is only returned in response.")
+    full_page: bool = Field(default=False, description="Capture the full scrollable page")
+    format: Optional[str] = Field(default="jpeg", description="Image format: 'png' or 'jpeg'. Default is 'jpeg' for smaller file size and faster capture.")
+    quality: Optional[int] = Field(default=50, description="JPEG quality 0-100. Only applies when format='jpeg'. Default is 50 for good balance of quality and speed.")
 
 
 class RefreshAction(BaseModel):

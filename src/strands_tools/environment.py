@@ -16,26 +16,20 @@ Key Features:
    • Protect system variables
 
 2. Security Features:
-   • Configurable protected variables list (via STRANDS_PROTECTED_VARS env var)
+   • Protected variables list
    • Value masking for sensitive data
    • Change confirmation
    • Variable validation
    • Risk level indicators
 
-3. Configuration Options:
-   • STRANDS_PROTECTED_VARS: Comma-separated list of protected variables
-     Example: STRANDS_PROTECTED_VARS="PATH,HOME,USER,CUSTOM_VAR"
-     Empty string disables all protections: STRANDS_PROTECTED_VARS=""
-   • Default protected: PATH, PYTHONPATH, STRANDS_HOME, SHELL, USER, HOME
-
-4. Rich Output:
+3. Rich Output:
    • Colorized tables with clear formatting
    • Visual indicators for protected variables
    • Operation previews with risk assessment
    • Success/error status panels
    • Variable categorization
 
-5. Smart Filtering:
+4. Smart Filtering:
    • Prefix-based filtering
    • Sensitive value detection
    • Protected variable identification
@@ -75,47 +69,85 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
-from strands import tool
+from strands.types.tools import ToolResult, ToolResultContent, ToolUse
 
 from strands_tools.utils import console_util, user_input
 
+TOOL_SPEC = {
+    "name": "environment",
+    "description": """Runtime environment variable management tool.
+    
+Key Features:
+1. Variable Management:
+   - Get all environment variables
+   - Set/update variables
+   - Delete variables
+   - Filter by prefix
+   - Validate values
+   
+2. Actions:
+   - list: Show all or filtered variables
+   - get: Get specific variable value
+   - set: Set/update variable value
+   - delete: Remove variable
+   - validate: Check variable format/value
+   
+3. Security:
+   - Protected variables list
+   - Value validation
+   - Change tracking
+   - Variable masking
+   
+4. Usage Examples:
+   # List all environment variables:
+   environment(action="list")
+   
+   # List variables with prefix:
+   environment(action="list", prefix="AWS_")
+   
+   # Get specific variable:
+   environment(action="get", name="MIN_SCORE")
+   
+   # Set variable:
+   environment(action="set", name="MIN_SCORE", value="0.7")
+   
+   # Delete variable:
+   environment(action="delete", name="TEMP_VAR")""",
+    "inputSchema": {
+        "json": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["list", "get", "set", "delete", "validate"],
+                    "description": "Action to perform on environment variables",
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Name of the environment variable",
+                },
+                "value": {
+                    "type": "string",
+                    "description": "Value to set for the environment variable",
+                },
+                "prefix": {
+                    "type": "string",
+                    "description": "Filter variables by prefix",
+                },
+                "masked": {
+                    "type": "boolean",
+                    "description": "Mask sensitive values in output",
+                    "default": True,
+                },
+            },
+            "required": ["action"],
+        }
+    },
+}
 
-# Default protected variables that can't be modified
-DEFAULT_PROTECTED_VARS = {"PATH", "PYTHONPATH", "STRANDS_HOME", "SHELL", "USER", "HOME"}
 
-def get_protected_vars() -> set:
-    """
-    Get the set of protected environment variables.
-
-    Configuration via STRANDS_PROTECTED_VARS environment variable:
-    - Not set: Uses default protected list (PATH, PYTHONPATH, STRANDS_HOME, SHELL, USER, HOME)
-    - Comma-separated list: Custom protected variables
-    - Empty string (""): Disables all protections (dangerous!)
-
-    Examples:
-        # Use defaults (when STRANDS_PROTECTED_VARS is not set)
-        # Protected: PATH, PYTHONPATH, STRANDS_HOME, SHELL, USER, HOME
-
-        # Custom protected list
-        export STRANDS_PROTECTED_VARS="PATH,HOME,USER,MY_API_KEY,DATABASE_URL"
-
-        # Disable all protections (use with extreme caution!)
-        export STRANDS_PROTECTED_VARS=""
-
-    Returns:
-        Set of protected variable names that cannot be modified or deleted
-    """
-    custom_protected = os.environ.get("STRANDS_PROTECTED_VARS")
-
-    if custom_protected is not None:
-        # User has explicitly configured protected vars
-        if custom_protected.strip() == "":
-            # Empty string means no protected vars (dangerous but allowed)
-            return set()
-        return set(var.strip() for var in custom_protected.split(",") if var.strip())
-
-    # Use default protected vars
-    return DEFAULT_PROTECTED_VARS
+# Protected variables that can't be modified
+PROTECTED_VARS = {"PATH", "PYTHONPATH", "STRANDS_HOME", "SHELL", "USER", "HOME"}
 
 
 def mask_sensitive_value(name: str, value: str) -> str:
@@ -159,12 +191,11 @@ def format_env_vars_table(env_vars: Dict[str, str], masked: bool, prefix: Option
     table.add_column("Name", style="cyan")
     table.add_column("Value", style="green")
 
-    protected_vars = get_protected_vars()
     for name, value in sorted(env_vars.items()):
         if prefix and not name.startswith(prefix):
             continue
 
-        protected = "🔒" if name in protected_vars else ""
+        protected = "🔒" if name in PROTECTED_VARS else ""
         display_value = mask_sensitive_value(name, value) if masked else value
         table.add_row(protected, name, str(display_value))
 
@@ -207,9 +238,8 @@ def format_operation_preview(
 
     table.add_row("Action", f"[{action_style}]{action.upper()}[/{action_style}]")
 
-    protected_vars = get_protected_vars()
     if name:
-        protected = name in protected_vars
+        protected = name in PROTECTED_VARS
         name_style = "red" if protected else "white"
         table.add_row(
             "Variable",
@@ -221,7 +251,7 @@ def format_operation_preview(
         table.add_row("Prefix Filter", prefix)
 
     # Add warning for protected variables
-    if name and name in protected_vars:
+    if name and name in PROTECTED_VARS:
         table.add_row(
             "⚠️ Warning",
             "[red]This is a protected system variable that cannot be modified[/red]",
@@ -265,7 +295,6 @@ def format_env_vars(env_vars: Dict[str, str], masked: bool, prefix: Optional[str
         List[Dict[str, Any]]: List of formatted variable entries with metadata
     """
     formatted = []
-    protected_vars = get_protected_vars()
 
     for name, value in sorted(env_vars.items()):
         if prefix and not name.startswith(prefix):
@@ -275,7 +304,7 @@ def format_env_vars(env_vars: Dict[str, str], masked: bool, prefix: Optional[str
             {
                 "name": name,
                 "value": mask_sensitive_value(name, value) if masked else value,
-                "protected": name in protected_vars,
+                "protected": name in PROTECTED_VARS,
             }
         )
 
@@ -332,14 +361,7 @@ def show_operation_result(console: Console, success: bool, message: str) -> None
         console.print(format_error_message(message))
 
 
-@tool
-def environment(
-    action: str,
-    name: Optional[str] = None,
-    value: Optional[str] = None,
-    prefix: Optional[str] = None,
-    masked: bool = True,
-) -> Dict[str, Any]:
+def environment(tool: ToolUse, **kwargs: Any) -> ToolResult:
     """
     Environment variable management tool for listing, getting, setting, and deleting environment variables.
 
@@ -374,46 +396,38 @@ def environment(
     - BYPASS_TOOL_CONSENT mode controls for testing and automation
 
     Args:
-        action: The action to perform (required) - one of "list", "get", "set", "delete", "validate"
-        name: Environment variable name (for get/set/delete/validate)
-        value: Value to set (for set action)
-        prefix: Filter prefix for list action
-        masked: Whether to mask sensitive values (default: True)
+        tool: The ToolUse object containing the action and parameters
+            tool["input"]["action"]: The action to perform (required)
+            tool["input"]["name"]: Environment variable name (for get/set/delete/validate)
+            tool["input"]["value"]: Value to set (for set action)
+            tool["input"]["prefix"]: Filter prefix for list action
+            tool["input"]["masked"]: Whether to mask sensitive values (default: True)
+        **kwargs: Additional keyword arguments (unused)
 
     Returns:
-        Dict containing:
+        ToolResult: Dictionary containing:
+            - toolUseId: The ID of the tool usage
             - status: "success" or "error"
             - content: List of content objects with results or error messages
 
-    Configuration Options:
-        Environment Variables:
-        - BYPASS_TOOL_CONSENT="true": Skip confirmation prompts for set/delete operations
-        - STRANDS_PROTECTED_VARS: Configure which variables are protected from modification
-          * Not set: Use defaults (PATH, PYTHONPATH, STRANDS_HOME, SHELL, USER, HOME)
-          * Comma-separated list: Custom protected variables
-          * Empty string: Disable all protections (dangerous!)
-
-        Examples:
-          # Add custom protected variables
-          export STRANDS_PROTECTED_VARS="PATH,HOME,USER,DATABASE_URL,API_KEY"
-
-          # Use only specific protections
-          export STRANDS_PROTECTED_VARS="PATH,HOME"
-
-          # Disable all protections (use with extreme caution!)
-          export STRANDS_PROTECTED_VARS=""
-
-        Automatic Masking:
-        - Sensitive variables (containing TOKEN, SECRET, PASSWORD, KEY, AUTH) are auto-masked
-        - Use masked=False parameter to show full values (security risk)
+    Notes:
+        - The ENV var "BYPASS_TOOL_CONSENT" can be set to "true" to bypass confirmation prompts
+        - Protected variables include PATH, PYTHONPATH, STRANDS_HOME, SHELL, USER, HOME
+        - Sensitive variables are detected by keywords in their names (TOKEN, SECRET, etc.)
+        - For security reasons, values of sensitive variables are masked in output
     """
     console = console_util.create()
 
     # Default return in case of unexpected code path
+    tool_use_id = tool["toolUseId"]
+    default_content: List[ToolResultContent] = [{"text": "Unknown error in environment tool"}]
     default_result = {
+        "toolUseId": tool_use_id,
         "status": "error",
-        "content": [{"text": "Unknown error in environment tool"}],
+        "content": default_content,
     }
+    tool_use_id = tool["toolUseId"]
+    tool_input = tool["input"]
 
     # Get environment variables at runtime
     env_vars_masked_default = os.getenv("ENV_VARS_MASKED_DEFAULT", "true").lower() == "true"
@@ -423,18 +437,20 @@ def environment(
 
     # Actions that need confirmation
     dangerous_actions = {"set", "delete"}
-    needs_confirmation = action in dangerous_actions and not strands_dev
+    needs_confirmation = tool_input["action"] in dangerous_actions and not strands_dev
 
     # Print BYPASS_TOOL_CONSENT mode status for debugging
     if strands_dev:
         console.print("[bold green]Running in BYPASS_TOOL_CONSENT mode - confirmation bypassed[/bold green]")
 
     try:
+        action = tool_input["action"]
 
         # Action processing starts here
 
         if action == "list":
-            # Use function parameters directly instead of tool_input
+            prefix = tool_input.get("prefix")
+            masked = tool_input.get("masked", env_vars_masked_default)
 
             # Format rich table
             table = format_env_vars_table(dict(os.environ), masked=masked, prefix=prefix)
@@ -456,27 +472,32 @@ def environment(
                 protected = "🔒" if var["protected"] else "  "
                 lines.append(f"{protected} {var['name']} = {var['value']}")
 
+            list_content: List[ToolResultContent] = [{"text": "\n".join(lines)}]
+
             return {
+                "toolUseId": tool_use_id,
                 "status": "success",
-                "content": [{"text": "\n".join(lines)}],
+                "content": list_content,
             }
 
         elif action == "get":
-            if not name:
+            if "name" not in tool_input:
                 console.print(format_error_message("name parameter is required"))
                 raise ValueError("name parameter is required for get action")
 
+            name = tool_input["name"]
             value = os.getenv(name)
 
             if value is None:
                 error_msg = f"Environment variable {name} not found"
                 console.print(format_error_message(error_msg))
                 return {
+                    "toolUseId": tool_use_id,
                     "status": "error",
                     "content": [{"text": error_msg}],
                 }
 
-            # masked is already a function parameter with default True
+            masked = tool_input.get("masked", env_vars_masked_default)
             safe_value = value if value is not None else ""
             display_value = mask_sensitive_value(name, safe_value) if masked else safe_value
 
@@ -490,7 +511,7 @@ def environment(
 
             # Add variable details
             table.add_row("Name", name)
-            table.add_row("Type", "Protected" if name in get_protected_vars() else "Standard")
+            table.add_row("Type", "Protected" if name in PROTECTED_VARS else "Standard")
             table.add_row("Value", display_value)
 
             # Add value properties
@@ -501,14 +522,13 @@ def environment(
                 table.add_row("Multiline", "Yes" if "\n" in value_str else "No")
 
             # Create info panel
-            is_protected = name in get_protected_vars()
             panel = Panel(
                 table,
                 title=(
-                    f"[bold {'yellow' if is_protected else 'blue'}]🔍 "
-                    f"Environment Variable Details[/bold {'yellow' if is_protected else 'blue'}]"
+                    f"[bold {'yellow' if name in PROTECTED_VARS else 'blue'}]🔍 "
+                    f"Environment Variable Details[/bold {'yellow' if name in PROTECTED_VARS else 'blue'}]"
                 ),
-                border_style="yellow" if is_protected else "blue",
+                border_style="yellow" if name in PROTECTED_VARS else "blue",
                 box=box.ROUNDED,
             )
             console.print(panel)
@@ -517,23 +537,29 @@ def environment(
             show_operation_result(console, True, f"Successfully retrieved {name}")
             # Create a return object with properly cast types
             final_display_value = display_value if masked else safe_value
+            get_content: List[ToolResultContent] = [{"text": f"{name} = {final_display_value}"}]
             return {
+                "toolUseId": tool_use_id,
                 "status": "success",
-                "content": [{"text": f"{name} = {final_display_value}"}],
+                "content": get_content,
             }
 
         elif action == "set":
-            if not name or value is None:
+            if "name" not in tool_input or "value" not in tool_input:
                 error_msg = "name and value parameters are required"
                 console.print(format_error_message(error_msg))
                 raise ValueError(error_msg)
 
+            name = tool_input["name"]
+            value = tool_input["value"]
+
             # Check protected status first, regardless of confirmation mode
-            if name in get_protected_vars():
+            if name in PROTECTED_VARS:
                 error_msg = f"⚠️ Cannot modify protected variable: {name}"
                 error_details = "\nProtected variables ensure system stability and security."
                 console.print(format_error_message(f"{error_msg}{error_details}"))
                 return {
+                    "toolUseId": tool_use_id,
                     "status": "error",
                     "content": [{"text": f"Cannot modify protected variable: {name}"}],
                 }
@@ -568,6 +594,7 @@ def environment(
                 if confirm.strip().lower() != "y":
                     console.print(format_error_message("Operation cancelled by user"))
                     return {
+                        "toolUseId": tool_use_id,
                         "status": "error",
                         "content": [{"text": f"Operation cancelled by user, reason: {confirm}"}],
                     }
@@ -595,45 +622,55 @@ def environment(
             )
 
             # Format content for return
+            set_content: List[ToolResultContent] = [{"text": f"Set {name} = {value}"}]
             return {
+                "toolUseId": tool_use_id,
                 "status": "success",
-                "content": [{"text": f"Set {name} = {value}"}],
+                "content": set_content,
             }
         elif action == "validate":
-            if not name:
+            if "name" not in tool_input:
                 raise ValueError("name parameter is required for validate action")
 
+            name = tool_input["name"]
             value = os.getenv(name)
 
             if value is None:
+                error_content: List[ToolResultContent] = [{"text": f"Environment variable {name} not found"}]
                 return {
+                    "toolUseId": tool_use_id,
                     "status": "error",
-                    "content": [{"text": f"Environment variable {name} not found"}],
+                    "content": error_content,
                 }
 
             # Add validation logic here based on variable name patterns
             # For example, validate URL format, numeric values, etc.
 
             # Format content for return
+            validate_content: List[ToolResultContent] = [{"text": f"Environment variable {name} is valid"}]
             return {
+                "toolUseId": tool_use_id,
                 "status": "success",
-                "content": [{"text": f"Environment variable {name} is valid"}],
+                "content": validate_content,
             }
 
         elif action == "delete":
-            if not name:
+            if "name" not in tool_input:
                 error_msg = "name parameter is required for delete action"
                 console.print(format_error_message(error_msg))
                 raise ValueError(error_msg)
 
+            name = tool_input["name"]
+
             # Check protected status first
-            if name in get_protected_vars():
+            if name in PROTECTED_VARS:
                 error_msg = (
                     f"⚠️ Cannot delete protected variable: {name}\n"
                     "Protected variables ensure system stability and security."
                 )
                 console.print(format_error_message(error_msg))
                 return {
+                    "toolUseId": tool_use_id,
                     "status": "error",
                     "content": [{"text": f"Cannot delete protected variable: {name}"}],
                 }
@@ -643,6 +680,7 @@ def environment(
                 error_msg = f"Environment variable not found: {name}"
                 console.print(format_error_message(error_msg))
                 return {
+                    "toolUseId": tool_use_id,
                     "status": "error",
                     "content": [{"text": error_msg}],
                 }
@@ -678,6 +716,7 @@ def environment(
                 if confirm.strip().lower() != "y":
                     console.print(format_error_message("Operation cancelled by user"))
                     return {
+                        "toolUseId": tool_use_id,
                         "status": "error",
                         "content": [{"text": f"Operation cancelled by user, reason: {confirm}"}],
                     }
@@ -706,16 +745,20 @@ def environment(
             )
 
             # Format content for return
+            delete_content: List[ToolResultContent] = [{"text": f"Deleted environment variable: {name}"}]
             return {
+                "toolUseId": tool_use_id,
                 "status": "success",
-                "content": [{"text": f"Deleted environment variable: {name}"}],
+                "content": delete_content,
             }
 
     except Exception as e:
+        exception_content: List[ToolResultContent] = [{"text": f"Environment tool error: {str(e)}"}]
         return {
+            "toolUseId": tool_use_id,
             "status": "error",
-            "content": [{"text": f"Environment tool error: {str(e)}"}],
+            "content": exception_content,
         }
 
     # Fallback return in case no action matched
-    return default_result
+    return default_result  # type: ignore
