@@ -5,6 +5,7 @@ This module provides a local Chromium browser implementation that runs
 browser instances on the local machine using Playwright.
 """
 
+import asyncio
 import logging
 import os
 from typing import Any, Dict, Optional
@@ -135,82 +136,54 @@ class LocalChromiumBrowser(Browser):
             # If we are connected via CDP (Electron), try to find existing pages first
             # to ensure we attach to the window that has the Preload API loaded.
             if "cdp_url" in self._default_launch_options:
-                # Retry logic to wait for initial context/page (race condition mitigation)
-                # Increased to 60 attempts (30 seconds) to allow for app startup
-                found_shell = False
-                target_context = None
-                target_page = None
+                session_browser = browser_or_context
+                contexts = session_browser.contexts
 
-                for i in range(60):
-                    if browser_or_context.contexts:
-                        # Search ALL contexts for the shell page
-                        for ctx in browser_or_context.contexts:
-                            if not ctx.pages:
-                                continue
-                            
-                            for page in ctx.pages:
-                                try:
-                                    # 1. Check for exposed electron API (Primary)
-                                    # Fix: page.evaluate does not accept timeout arg, use asyncio.wait_for
-                                    is_shell = await asyncio.wait_for(
-                                        page.evaluate("!!window.electron"), 
-                                        timeout=5.0  # Increased to 5s for robustness
-                                    )
-                                    if is_shell:
-                                        target_context = ctx
-                                        target_page = page
-                                        found_shell = True
-                                        logger.info(f"Found Electron Shell via window.electron at: {page.url}")
-                                        break
-                                    
-                                    # 2. Heuristic Check
-                                    title = await page.title()
-                                    if "Ron Browser" in title:
-                                        # Likely the right page, wait a bit
-                                        await asyncio.sleep(0.5)
-                                        is_shell = await asyncio.wait_for(
-                                            page.evaluate("!!window.electron"),
-                                            timeout=5.0  # Increased to 5s
-                                        )
-                                        if is_shell:
-                                            target_context = ctx
-                                            target_page = page
-                                            found_shell = True
-                                            logger.info(f"Found Electron Shell (heuristic match) at: {page.url}")
-                                            break
-                                except Exception:
-                                    continue
-                            
-                            if found_shell:
-                                break
-                    
-                    if found_shell:
-                        break
-                        
-                    if i % 10 == 0:
-                        logger.info(f"Waiting for Electron window... ({i+1}/60)")
-                    await asyncio.sleep(0.5)
-                
-                if found_shell and target_context and target_page:
-                    session_browser = browser_or_context
-                    session_context = target_context
-                    session_page = target_page
-                    self._cached_shell_page = target_page
-                    logger.info("Confirmed attached page is the Electron Shell ✅")
-                elif browser_or_context.contexts:
-                     # Fallback to first context if scanning failed
-                    logger.warning("Could not find Shell Page in any context. Defaulting to first available context.")
-                    session_browser = browser_or_context
-                    session_context = browser_or_context.contexts[0]
+                # Playwright docs: default context is available via browser.contexts[0].
+                if contexts:
+                    session_context = contexts[0]
                     if session_context.pages:
                         session_page = session_context.pages[0]
                     else:
                         session_page = await session_context.new_page()
                 else:
                     logger.warning("No existing contexts found in Electron CDP. Creating new context (fallback).")
-                    session_browser = browser_or_context
                     session_context = await session_browser.new_context()
                     session_page = await session_context.new_page()
+
+                async def _is_shell(page: Page) -> bool:
+                    try:
+                        return await asyncio.wait_for(page.evaluate("!!window.electron"), timeout=1.0)
+                    except Exception:
+                        return False
+
+                # Prefer the default page, then do a single bounded scan for the shell.
+                if await _is_shell(session_page):
+                    self._cached_shell_page = session_page
+                    logger.info("Confirmed attached page is the Electron Shell ✅")
+                else:
+                    target_context = None
+                    target_page = None
+                    for ctx in contexts:
+                        for page in ctx.pages:
+                            if page is session_page:
+                                continue
+                            if await _is_shell(page):
+                                target_context = ctx
+                                target_page = page
+                                logger.info(f"Found Electron Shell via window.electron at: {page.url}")
+                                break
+                        if target_page:
+                            break
+
+                    if target_context and target_page:
+                        session_context = target_context
+                        session_page = target_page
+                        self._cached_shell_page = target_page
+                    else:
+                        logger.warning(
+                            "Shell page not found via window.electron; using default context/page for CDP session."
+                        )
             else:
                 # Normal non-persistent case
                 session_browser = browser_or_context
@@ -402,6 +375,8 @@ class LocalChromiumBrowser(Browser):
         if not shell:
             return {"status": "error", "content": [{"text": "Cannot evaluate: Shell page not found."}]}
         
+        timeout_s = float(os.getenv("STRANDS_EVALUATE_TIMEOUT", "8"))
+
         # Routing Logic for Evaluate
         if "electron" in action.script.lower() and "window.electron" in action.script:
             # Run on Shell for app control
@@ -414,8 +389,10 @@ class LocalChromiumBrowser(Browser):
                 return {"status": "error", "content": [{"text": "Cannot evaluate: No active content page. Navigate to a website first."}]}
 
         try:
-            result = await page.evaluate(action.script)
+            result = await asyncio.wait_for(page.evaluate(action.script), timeout=timeout_s)
             return {"status": "success", "content": [{"text": f"Evaluation result: {result}"}]}
+        except asyncio.TimeoutError:
+            return {"status": "error", "content": [{"text": f"Evaluate timed out after {timeout_s}s"}]}
         except Exception as e:
             return {"status": "error", "content": [{"text": f"Evaluate failed: {str(e)}"}]}
 

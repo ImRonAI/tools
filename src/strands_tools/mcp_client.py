@@ -244,6 +244,9 @@ def mcp_client(
     connection_id: Optional[str] = None,
     tool_name: Optional[str] = None,
     tool_args: Optional[Dict[str, Any]] = None,
+    prompt_name: Optional[str] = None,
+    prompt_args: Optional[Dict[str, Any]] = None,
+    pagination_token: Optional[str] = None,
     # Additional parameters that can be passed directly
     transport: Optional[str] = None,
     command: Optional[str] = None,
@@ -283,13 +286,18 @@ def mcp_client(
     - call_tool: Directly invoke a tool on a connected server
     - list_connections: Show all active MCP connections
     - load_tools: Load MCP tools into agent's tool registry for direct access
+    - list_prompts: List available prompts from a connected server
+    - get_prompt: Retrieve a prompt (optionally with arguments) from a connected server
 
     Args:
-        action: The action to perform (connect, list_tools, disconnect, call_tool, list_connections)
+        action: The action to perform (connect, list_tools, disconnect, call_tool, list_connections, list_prompts, get_prompt)
         server_config: Configuration for MCP server connection (optional, can use direct parameters)
         connection_id: Identifier for the MCP connection
         tool_name: Name of tool to call (for call_tool action)
         tool_args: Arguments to pass to tool (for call_tool action)
+        prompt_name: Name of prompt to retrieve (for get_prompt action)
+        prompt_args: Arguments to pass to prompt (for get_prompt action, string values only)
+        pagination_token: Cursor token for list_prompts pagination (optional)
         transport: Transport type (stdio, sse, or streamable_http) - can be passed directly instead of in server_config
         command: Command for stdio transport - can be passed directly
         args: Arguments for stdio command - can be passed directly
@@ -341,6 +349,9 @@ def mcp_client(
             "connection_id": connection_id,
             "tool_name": tool_name,
             "tool_args": tool_args or arguments,  # Support both parameter names
+            "prompt_name": prompt_name,
+            "prompt_args": prompt_args,
+            "pagination_token": pagination_token,
             "agent": agent,  # Pass agent instance to handlers
         }
 
@@ -414,13 +425,17 @@ def mcp_client(
             return _call_server_tool(params)
         elif action == "load_tools":
             return _load_tools_to_agent(params)
+        elif action == "list_prompts":
+            return _list_server_prompts(params)
+        elif action == "get_prompt":
+            return _get_server_prompt(params)
         else:
             return {
                 "status": "error",
                 "content": [
                     {
                         "text": f"Unknown action: {action}. Available actions: "
-                        "connect, disconnect, list_connections, list_tools, call_tool, load_tools"
+                        "connect, disconnect, list_connections, list_tools, call_tool, load_tools, list_prompts, get_prompt"
                     }
                 ],
             }
@@ -601,6 +616,75 @@ def _list_server_tools(params: Dict[str, Any]) -> Dict[str, Any]:
         }
     except Exception as e:
         return {"status": "error", "content": [{"text": f"Failed to list tools: {str(e)}"}]}
+
+
+def _list_server_prompts(params: Dict[str, Any]) -> Dict[str, Any]:
+    """List available prompts from a connected MCP server."""
+    connection_id = params.get("connection_id")
+    error_result = _validate_connection(connection_id, check_active=True)
+    if error_result:
+        return error_result
+
+    pagination_token = params.get("pagination_token")
+
+    try:
+        config = _get_connection(connection_id)
+        with config.mcp_client:
+            prompts_result = config.mcp_client.list_prompts_sync(pagination_token=pagination_token)
+
+        return {
+            "status": "success",
+            "content": [
+                {"text": f"Listed prompts for MCP server '{connection_id}'"},
+                {"json": prompts_result.model_dump(by_alias=True)},
+            ],
+        }
+    except Exception as e:
+        return {"status": "error", "content": [{"text": f"Failed to list prompts: {str(e)}"}]}
+
+
+def _get_server_prompt(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Get a specific prompt from a connected MCP server."""
+    connection_id = params.get("connection_id")
+    prompt_name = params.get("prompt_name")
+
+    if not prompt_name:
+        return {"status": "error", "content": [{"text": "prompt_name is required for get_prompt action"}]}
+
+    error_result = _validate_connection(connection_id, check_active=True)
+    if error_result:
+        return error_result
+
+    try:
+        config = _get_connection(connection_id)
+        prompt_args = params.get("prompt_args") or {}
+        if prompt_args:
+            non_string_keys = [key for key, value in prompt_args.items() if not isinstance(value, str)]
+            if non_string_keys:
+                return {
+                    "status": "error",
+                    "content": [
+                        {
+                            "text": "prompt_args values must be strings per MCP spec. "
+                            f"Non-string keys: {', '.join(non_string_keys)}"
+                        }
+                    ],
+                }
+        with config.mcp_client:
+            prompt_result = config.mcp_client.get_prompt_sync(prompt_name, prompt_args or None)
+
+        return {
+            "status": "success",
+            "content": [
+                {"text": f"Retrieved prompt '{prompt_name}' from MCP server '{connection_id}'"},
+                {"json": prompt_result.model_dump(by_alias=True)},
+            ],
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "content": [{"text": f"Failed to get prompt '{prompt_name}': {str(e)}"}],
+        }
 
 
 def _call_server_tool(params: Dict[str, Any]) -> Dict[str, Any]:

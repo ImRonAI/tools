@@ -25,53 +25,9 @@ class ElectronSandboxTools:
         """
         # Serialize args to JSON
         json_args = json.dumps(args)
-        # Construct script: method(...args)
-        # Note: we use spread ...JSON.parse(args) to pass arguments
-        script = f"""
-            (async () => {{
-                const args = {json_args};
-                return await window.electron.sandbox.{method}(...args);
-            }})()
-        """
-        
+        session_name = self.browser.get_default_session_name() or "default"
         try:
-            # We assume session 'main' exists. If not, we might need to handle init.
-            # But superagent initializes browser which sets op main session.
-            result = await self.browser.evaluate(EvaluateAction(
-                type="evaluate",
-                script=script,
-                session_name="main"
-            ))
-            
-            # The result content from browser.evaluate is usually:
-            # [{"text": "Evaluation result: ..."}]
-            content_list = result.get("content", [])
-            if not content_list:
-                return {"success": False, "error": "No content from browser evaluation"}
-            
-            text_resp = content_list[0].get("text", "")
-            prefix = "Evaluation result: "
-            if text_resp.startswith(prefix):
-                 # The return value from Electron is likely an object { success, ... }
-                 # Playwright returns it as a stringified object if it's complex, or we get a primitive.
-                 # Actually strands browser tool returns stringified JSON usually? 
-                 # Let's inspect browser.py evaluate logic.
-                 # Usually it returns the raw value. If it's an object, Playwright returns it.
-                 # The strands tool wraps it in "Evaluation result: {val}"
-                 
-                 # However, if it's an object, valid JSON parsing might be tricky if it's just str(obj).
-                 # To be safe, the script above returns a Promise that resolves to the object.
-                 # Playwright handles JSON serialization of the return value.
-                 pass
-
-            # Since browser.evaluate implementation details might vary on how it serializes objects,
-            # let's assume we get a string we can parse or a dict.
-            # Wait, `evaluate` in `LocalChromiumBrowser` returns a Dict.
-            # The tool output formats it as text.
-            
-            # PRO TIP: The most reliable way is to have the script return JSON.stringify(result)
-            # preventing any ambiguity in the tool chain.
-            
+            # Use JSON.stringify in the browser context to keep parsing deterministic.
             script_json = f"""
                 (async () => {{
                     const args = {json_args};
@@ -83,9 +39,15 @@ class ElectronSandboxTools:
             result_json = await self.browser.evaluate(EvaluateAction(
                 type="evaluate",
                 script=script_json,
-                session_name="main"
+                session_name=session_name
             ))
             
+            if result_json.get("status") != "success":
+                return {
+                    "success": False,
+                    "error": result_json.get("content", [{}])[0].get("text", "Evaluation failed")
+                }
+
             text = result_json["content"][0]["text"]
             if text.startswith("Evaluation result: "):
                 raw_json = text[len("Evaluation result: "):]
