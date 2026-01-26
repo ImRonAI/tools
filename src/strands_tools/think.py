@@ -254,7 +254,7 @@ def think(
             Examples: "bedrock", "anthropic", "litellm", "env"
         model_settings: Optional custom configuration for the model.
             If not provided, uses default configuration for the provider.
-            Example: {"model_id": "claude-sonnet-4-20250514", "params": {"temperature": 1}}
+            Example: {"model_id": "gemini-3-flash-preview", "params": {"temperature": 1}}
         thinking_system_prompt: Optional custom thinking instructions that override the default
             thinking methodology. This controls HOW the agent thinks about the problem, separate
             from the system_prompt which controls the agent's persona/role.
@@ -288,7 +288,7 @@ def think(
         thought="How can we make AI more creative?",
         cycle_count=3,
         system_prompt="You are a creative AI researcher.",
-        model_provider="bedrock"
+        model_provider="google"
     )
 
     # Use Ollama for local processing
@@ -301,8 +301,8 @@ def think(
     )
 
     # Use environment configuration with custom thinking methodology
-    os.environ["STRANDS_PROVIDER"] = "anthropic"
-    os.environ["STRANDS_MODEL_ID"] = "claude-sonnet-4-20250514"
+    os.environ["STRANDS_PROVIDER"] = "google"
+    os.environ["STRANDS_MODEL_ID"] = "gemini-3-flash-preview"
     result = agent.tool.think(
         thought="What are the ethical implications?",
         cycle_count=4,

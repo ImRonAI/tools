@@ -305,19 +305,28 @@ class TestScreenshotAndAnalysis:
         with (
             patch("os.path.exists", return_value=True),
             patch("builtins.open", mock_open(read_data=b"test image data")),
-            patch("PIL.Image.open") as mock_image_open,
+            patch("src.strands_tools.use_computer.compress_image_bytes") as mock_compress,
+            patch("src.strands_tools.use_computer.cache_image_bytes", return_value="screenshots/cache/test.jpg"),
+            patch("src.strands_tools.use_computer.load_screenshot_config") as mock_config,
         ):
-            # Mock the PIL Image object
-            mock_img = MagicMock()
-            mock_img.format = "PNG"
-            mock_image_open.return_value.__enter__.return_value = mock_img
+            mock_config.return_value = MagicMock(
+                max_dimension=640,
+                jpeg_quality=45,
+                max_bytes=450000,
+                min_dimension=256,
+                min_quality=25,
+                cache_dir="screenshots/cache",
+                cache_ttl_seconds=1800,
+                cache_max_items=50,
+            )
+            mock_compress.return_value = (b"jpeg data", {"bytes": 9, "quality": 45, "fits": True})
 
             # Call the function
             result = handle_sending_results_to_llm("test.png")
 
             # Verify the result
             assert "image" in result
-            assert result["image"]["format"] == "png"
+            assert result["image"]["format"] == "jpeg"
             assert "bytes" in result["image"]["source"]
 
     def test_handle_sending_results_to_llm_nonexistent_file(self):

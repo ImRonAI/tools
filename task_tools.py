@@ -7,6 +7,7 @@ in the Ron Browser Kanban board via the browser IPC bridge.
 import json
 import logging
 import time
+import asyncio
 from typing import Dict, Any, List, Optional
 from strands import tool
 from strands_tools.browser import LocalChromiumBrowser
@@ -409,7 +410,10 @@ class TaskTools:
             try:
                 page = await self.browser._get_shell_page()
                 if page:
-                    return await page.evaluate(script)
+                    try:
+                        return await asyncio.wait_for(page.evaluate(script), timeout=5.0)
+                    except asyncio.TimeoutError:
+                        return {"error": "shell_eval_timeout", "message": "Timed out executing task operation on shell page."}
             except Exception as e:
                 logger.warning(f"Failed to execute on shell page: {e}")
         
@@ -419,9 +423,15 @@ class TaskTools:
                 if session.context:
                     for page in session.context.pages:
                         try:
-                            has_app = await page.evaluate("!!window.ronApp")
+                            has_app = await asyncio.wait_for(
+                                page.evaluate("!!window.ronApp"),
+                                timeout=2.0
+                            )
                             if has_app:
-                                return await page.evaluate(script)
+                                try:
+                                    return await asyncio.wait_for(page.evaluate(script), timeout=5.0)
+                                except asyncio.TimeoutError:
+                                    return {"error": "shell_eval_timeout", "message": "Timed out executing task operation on page."}
                         except Exception:
                             continue
         

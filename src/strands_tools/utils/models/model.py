@@ -173,6 +173,11 @@ def create_model(provider: str = None, config: dict[str, Any] = None) -> Model:
 
         return OpenAIModel(**config)
 
+    elif provider == "google":
+        from strands.models.gemini import GeminiModel
+
+        return GeminiModel(**config)
+
     else:
         # Try to load custom model provider
         try:
@@ -284,6 +289,18 @@ def get_provider_config(provider: str) -> dict[str, Any]:
             "params": {"max_tokens": int(os.getenv("STRANDS_MAX_TOKENS", "4000"))},
         }
 
+    elif provider == "google":
+        return {
+            "client_args": {
+                "api_key": os.getenv("GOOGLE_API_KEY"),
+            },
+            "model_id": os.getenv("STRANDS_MODEL_ID", "gemini-3-flash-preview"),
+            "params": {
+                "max_output_tokens": int(os.getenv("STRANDS_MAX_TOKENS", "8192")),
+                "temperature": float(os.getenv("STRANDS_TEMPERATURE", "0.7")),
+            },
+        }
+
     else:
         raise ValueError(f"Unknown provider: {provider}")
 
@@ -303,7 +320,9 @@ def get_available_providers() -> list[str]:
         "openai",
         "writer",
         "cohere",
+        "cohere",
         "github",
+        "google",
     ]
 
 
@@ -387,6 +406,16 @@ def get_provider_info(provider: str) -> dict[str, Any]:
             "env_vars": [
                 "GITHUB_TOKEN",
                 "PAT_TOKEN",
+                "STRANDS_MODEL_ID",
+                "STRANDS_MAX_TOKENS",
+            ],
+        },
+        "google": {
+            "name": "Google Gemini",
+            "description": "Google's Gemini models",
+            "default_model": "gemini-3-flash-preview",
+            "env_vars": [
+                "GOOGLE_API_KEY",
                 "STRANDS_MODEL_ID",
                 "STRANDS_MAX_TOKENS",
             ],

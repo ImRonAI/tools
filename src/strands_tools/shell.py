@@ -103,7 +103,7 @@ class CommandExecutor:
     """Handles execution of shell commands with timeout."""
 
     def __init__(self, timeout: int = None) -> None:
-        self.timeout = int(os.environ.get("SHELL_DEFAULT_TIMEOUT", "900")) if timeout is None else timeout
+        self.timeout = int(os.environ.get("SHELL_DEFAULT_TIMEOUT", "15")) if timeout is None else timeout
         self.output_queue: queue.Queue = queue.Queue()
         self.exit_code = None
         self.error = None
@@ -506,7 +506,7 @@ def shell(
 
     # Set defaults for parameters
     if timeout is None:
-        timeout = int(os.environ.get("SHELL_DEFAULT_TIMEOUT", "900"))
+        timeout = int(os.environ.get("SHELL_DEFAULT_TIMEOUT", "15"))
     if work_dir is None:
         work_dir = os.getcwd()
 

@@ -42,8 +42,9 @@ import os
 from os.path import expanduser
 from typing import Any, Dict
 
-from PIL import Image
 from strands import tool
+
+from strands_tools.utils.image_processing import cache_image_bytes, compress_image_bytes, load_screenshot_config
 
 
 @tool
@@ -51,10 +52,9 @@ def image_reader(image_path: str) -> Dict[str, Any]:
     """
     Read an image file from disk and prepare it for use with Converse API.
 
-    This function reads image files from the specified path, detects the image format,
-    and converts the content into the proper format required by the Converse API.
-    It handles various image formats and provides appropriate error messages when
-    issues are encountered.
+    This function reads image files from the specified path, compresses them to JPEG
+    at 60% quality to reduce token usage, and converts the content into the proper
+    format required by the Converse API.
 
     Args:
         image_path: Path to the image file to read. Can be absolute or user-relative (with ~/)
@@ -64,7 +64,7 @@ def image_reader(image_path: str) -> Dict[str, Any]:
         - On success: Returns image data formatted for the Converse API
           {
               "status": "success",
-              "content": [{"image": {"format": "<image_format>", "source": {"bytes": <binary_data>}}}]
+              "content": [{"image": {"format": "jpeg", "source": {"bytes": <binary_data>}}}]
           }
         - On failure: Returns an error message
           {
@@ -73,13 +73,17 @@ def image_reader(image_path: str) -> Dict[str, Any]:
           }
 
     Notes:
-        - Supported image formats include: PNG, JPEG/JPG, GIF, and WebP
-        - If the image format is not recognized, it defaults to PNG
+        - Images are converted to JPEG with size limits from STRANDS_SCREENSHOT_* env vars
+        - Large images are resized to a max dimension before compression
         - The function validates file existence before attempting to read
         - User paths with tilde (~) are automatically expanded
+        - Relative paths are resolved from current working directory
     """
     try:
+        # Expand user paths (~) and resolve relative paths to absolute
         file_path = expanduser(image_path)
+        if not os.path.isabs(file_path):
+            file_path = os.path.abspath(file_path)
 
         if not os.path.exists(file_path):
             return {
@@ -87,19 +91,27 @@ def image_reader(image_path: str) -> Dict[str, Any]:
                 "content": [{"text": f"File not found at path: {file_path}"}],
             }
 
-        with open(file_path, "rb") as file:
-            file_bytes = file.read()
+        config = load_screenshot_config()
+        with open(file_path, "rb") as handle:
+            raw_bytes = handle.read()
 
-        # Handle image files using PIL
-        with Image.open(file_path) as img:
-            image_format = img.format.lower()
-            if image_format not in ["png", "jpeg", "jpg", "gif", "webp"]:
-                image_format = "png"  # Default to PNG if format is not recognized
+        compressed_bytes, info = compress_image_bytes(raw_bytes, config)
+        cache_path = cache_image_bytes(compressed_bytes, config, prefix="image_reader")
 
-        return {
-            "status": "success",
-            "content": [{"image": {"format": image_format, "source": {"bytes": file_bytes}}}],
-        }
+        if not info["fits"]:
+            note = (
+                "Image cached but omitted from context "
+                f"({round(info['bytes'] / 1024, 1)} KB > {round(config.max_bytes / 1024, 1)} KB)"
+            )
+            if cache_path:
+                note = f"{note}. Cache: {cache_path}"
+            return {"status": "success", "content": [{"text": note}]}
+
+        image_block = {"image": {"format": "jpeg", "source": {"bytes": compressed_bytes}}}
+        if cache_path:
+            image_block["cache_path"] = cache_path
+
+        return {"status": "success", "content": [image_block]}
     except Exception as e:
         return {
             "status": "error",

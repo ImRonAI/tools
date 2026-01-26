@@ -19,6 +19,7 @@ from .models import (
 )
 
 from .browser import Browser
+from strands_tools.utils.image_processing import cache_image_bytes, compress_image_bytes, load_screenshot_config
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,8 @@ class LocalChromiumBrowser(Browser):
         self._default_context_options: Dict[str, Any] = {}
         # Cache for fast lookups
         self._cached_shell_page: Optional[Page] = None
+        # Cache CDP browser connection (can only connect once)
+        self._cdp_browser: Optional[PlaywrightBrowser] = None
 
     async def start_platform(self) -> None:
         """Initialize the local Chromium browser platform with configuration (ASYNC)."""
@@ -79,28 +82,34 @@ class LocalChromiumBrowser(Browser):
         """Create a new local Chromium browser instance for a session."""
         if not self._playwright:
             raise RuntimeError("Playwright not initialized")
-        
+
         # Connect to existing CDP session if configured
         if "cdp_url" in self._default_launch_options:
+            # CACHE THE CDP CONNECTION - can only connect once
+            if self._cdp_browser:
+                logger.info("Reusing cached CDP browser connection")
+                return self._cdp_browser
+
             cdp_url = self._default_launch_options["cdp_url"]
             logger.info(f"Connecting to existing browser via CDP: {cdp_url}")
-            
+
             # Retry loop for socket connection (handles race condition where Electron starts slower than Python)
-            import asyncio
             last_error = None
-            
+
             # Try for 30 seconds (60 attempts * 0.5s)
             logger.info(f"Connecting to CDP at {cdp_url}...")
             for i in range(60):
                 try:
                     # Set a short timeout (2s) so we don't hang if the socket is open but silent
-                    return await self._playwright.chromium.connect_over_cdp(cdp_url, timeout=2000)
+                    self._cdp_browser = await self._playwright.chromium.connect_over_cdp(cdp_url, timeout=2000)
+                    logger.info("✅ CDP connection established and cached")
+                    return self._cdp_browser
                 except Exception as e:
                     last_error = e
                     if i % 10 == 0: # Log every 5 seconds
                         logger.info(f"Waiting for Electron CDP... ({i+1}/60) - Ensure Electron is running.")
                     await asyncio.sleep(0.5)
-            
+
             # If all retries fail, raise the last error
             logger.error(f"Failed to connect to CDP at {cdp_url} after 30 seconds.")
             raise RuntimeError(f"Failed to connect to CDP at {cdp_url}. Is Electron running? Error: {last_error}")
@@ -407,36 +416,48 @@ class LocalChromiumBrowser(Browser):
             return {"status": "error", "content": [{"text": "Cannot screenshot: No active content page. Navigate to a website first."}]}
 
         try:
-            # JPEG at 50% quality for maximum speed (was 80% - reduced for performance)
-            # Quality 50 is nearly indistinguishable from 80 but 2-3x smaller/faster
-            # FORCE full_page=False: The 'ValidationException' from Bedrock indicates
-            # full page screenshots exceed the model's max image size (pixels/bytes).
-            # We must use viewport only to ensure stability and preventing crashing.
-            quality = action.quality if hasattr(action, 'quality') and action.quality else 50
+            config = load_screenshot_config()
+            quality = action.quality if hasattr(action, "quality") and action.quality else config.jpeg_quality
             screenshot_bytes = await page.screenshot(
                 type="jpeg",
                 quality=quality,
                 full_page=False,
-                timeout=5000
+                timeout=5000,
             )
+            processed_bytes, info = compress_image_bytes(
+                screenshot_bytes,
+                config,
+                jpeg_quality=quality,
+            )
+            cache_path = cache_image_bytes(processed_bytes, config, prefix="browser")
 
             # Save to file if requested
             if action.path:
                 screenshots_dir = os.getenv("STRANDS_BROWSER_SCREENSHOTS_DIR", "screenshots")
                 os.makedirs(screenshots_dir, exist_ok=True)
                 path = os.path.join(screenshots_dir, action.path) if not os.path.isabs(action.path) else action.path
+                if not path.lower().endswith((".jpg", ".jpeg")):
+                    path = f"{os.path.splitext(path)[0]}.jpg"
                 with open(path, "wb") as f:
-                    f.write(screenshot_bytes)
+                    f.write(processed_bytes)
 
-            # Return RAW bytes - Strands SDK's encode_bytes_values() will handle base64 encoding
-            # Passing pre-encoded base64 caused double-encoding and massive JSON serialization delays
-            return {
-                "status": "success",
-                "content": [
-                    {"image": {"format": "jpeg", "source": {"bytes": screenshot_bytes}}},
-                    {"text": f"Screenshot ({len(screenshot_bytes) // 1024} KB)"}
-                ]
-            }
+            content = []
+            if info["fits"]:
+                image_block = {"image": {"format": "jpeg", "source": {"bytes": processed_bytes}}}
+                if cache_path:
+                    image_block["cache_path"] = cache_path
+                content.append(image_block)
+            else:
+                note = (
+                    "Screenshot cached but omitted from context "
+                    f"({round(info['bytes'] / 1024, 1)} KB > {round(config.max_bytes / 1024, 1)} KB)"
+                )
+                if cache_path:
+                    note = f"{note}. Cache: {cache_path}"
+                content.append({"text": note})
+
+            content.append({"text": f"Screenshot ({round(info['bytes'] / 1024, 1)} KB)"})
+            return {"status": "success", "content": content}
         except Exception as e:
             logger.error(f"Screenshot failed: {e}")
             return {"status": "error", "content": [{"text": f"Screenshot failed: {str(e)}"}]}

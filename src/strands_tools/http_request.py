@@ -753,6 +753,9 @@ def http_request(tool: ToolUse, **kwargs: Any) -> ToolResult:
         console.print(Text("Sending request...", style="blue"))
 
         # Prepare request
+        # Default timeout: 15 seconds (connect timeout, read timeout)
+        # If a server doesn't respond in 15s, it's broken - fail fast so agent can retry
+        default_timeout = (5, 15)  # (connect_timeout, read_timeout)
         request_kwargs = {
             "method": method,
             "url": url,
@@ -761,6 +764,7 @@ def http_request(tool: ToolUse, **kwargs: Any) -> ToolResult:
             "auth": auth,
             "allow_redirects": tool_input.get("allow_redirects", True),
             "proxies": tool_input.get("proxies", None),
+            "timeout": tool_input.get("timeout", default_timeout),
         }
 
         # Set max_redirects if specified

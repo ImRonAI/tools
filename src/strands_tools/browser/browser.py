@@ -20,6 +20,8 @@ from playwright.async_api import Page, async_playwright
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from strands import tool
 
+from strands_tools.utils.image_processing import cache_image_bytes, compress_image_bytes, load_screenshot_config
+
 from .models import (
     BackAction,
     BrowserInput,
@@ -240,6 +242,8 @@ class Browser(ABC):
     # Session Management Methods
     async def init_session(self, action: InitSessionAction) -> Dict[str, Any]:
         """Initialize a new browser session (ASYNC)."""
+        if not self._started:
+            await self._start()
         return await self._async_init_session(action)
 
     async def _async_init_session(self, action: InitSessionAction) -> Dict[str, Any]:
@@ -625,20 +629,24 @@ class Browser(ABC):
             return {"status": "error", "content": [{"text": "Error: No active page for session"}]}
 
         try:
-            # Build screenshot options
+            config = load_screenshot_config()
+            capture_quality = action.quality or config.jpeg_quality
             screenshot_options = {
-                "type": action.format or "jpeg",
-                "full_page": action.full_page or False
+                "type": "jpeg",
+                "full_page": action.full_page or False,
+                "quality": capture_quality,
             }
-
-            # Add quality for JPEG
-            if screenshot_options["type"] == "jpeg":
-                screenshot_options["quality"] = action.quality or 50
 
             logger.debug(f"About to take screenshot with options: {screenshot_options}")
 
             # Capture to MEMORY (no path parameter) - returns bytes
             screenshot_bytes = await page.screenshot(**screenshot_options)
+            processed_bytes, info = compress_image_bytes(
+                screenshot_bytes,
+                config,
+                jpeg_quality=capture_quality,
+            )
+            cache_path = cache_image_bytes(processed_bytes, config, prefix="browser")
 
             # OPTIONALLY save to file if path provided
             saved_msg = ""
@@ -646,26 +654,33 @@ class Browser(ABC):
                 screenshots_dir = os.getenv("STRANDS_BROWSER_SCREENSHOTS_DIR", "screenshots")
                 os.makedirs(screenshots_dir, exist_ok=True)
                 full_path = os.path.join(screenshots_dir, action.path) if not os.path.isabs(action.path) else action.path
+                if not full_path.lower().endswith((".jpg", ".jpeg")):
+                    full_path = f"{os.path.splitext(full_path)[0]}.jpg"
 
                 with open(full_path, 'wb') as f:
-                    f.write(screenshot_bytes)
+                    f.write(processed_bytes)
 
                 saved_msg = f"Screenshot saved to {full_path}. "
                 logger.debug(f"Screenshot saved to file: {full_path}")
 
-            # Return image in response (Anthropic/Strands format)
-            return {
-                "status": "success",
-                "content": [
-                    {"text": f"{saved_msg}Screenshot captured successfully."},
-                    {
-                        "image": {
-                            "format": screenshot_options["type"],
-                            "source": {"bytes": screenshot_bytes}
-                        }
-                    }
-                ]
-            }
+            content = []
+            if info["fits"]:
+                image_block = {"image": {"format": "jpeg", "source": {"bytes": processed_bytes}}}
+                if cache_path:
+                    image_block["cache_path"] = cache_path
+                content.append(image_block)
+            else:
+                note = (
+                    "Screenshot cached but omitted from context "
+                    f"({round(info['bytes'] / 1024, 1)} KB > {round(config.max_bytes / 1024, 1)} KB)"
+                )
+                if cache_path:
+                    note = f"{note}. Cache: {cache_path}"
+                content.append({"text": note})
+
+            content.append({"text": f"{saved_msg}Screenshot captured ({round(info['bytes'] / 1024, 1)} KB)."})
+
+            return {"status": "success", "content": content}
         except Exception as e:
             logger.debug("exception=<%s> | screenshot action failed", str(e))
             return {"status": "error", "content": [{"text": f"Error: {str(e)}"}]}

@@ -34,10 +34,10 @@ import numpy as np
 import psutil
 import pyautogui
 import pytesseract
-from PIL import Image
 from strands import tool
 
 from strands_tools.utils.user_input import get_user_input
+from strands_tools.utils.image_processing import cache_image_bytes, compress_image_bytes, load_screenshot_config
 
 # Import libraries for macOS
 if platform.system().lower() == "darwin":
@@ -303,8 +303,9 @@ class UseComputerMethods:
                 }
 
         Note:
-            Large screenshots (>5MB) will automatically disable send_screenshot to prevent
-            exceeding model context limits, regardless of the parameter value.
+            Large screenshots are compressed and size-capped using STRANDS_SCREENSHOT_*
+            settings. If the compressed image still exceeds the max size, the image
+            is omitted from the response and cached on disk.
         """
         # Get text analysis results using Tesseract OCR
         analysis_results = handle_analyze_screenshot_pytesseract(screenshot_path, region, min_confidence)
@@ -317,41 +318,8 @@ class UseComputerMethods:
         image_content = None
 
         if send_screenshot:
-            # Check the file size first as a quick filter
-            if os.path.exists(image_path):
-                # File size check - consider base64 encoding overhead (approximately 33%)
-                # Base64 encoding increases size by ~33% (4/3) plus some additional overhead
-                raw_size = os.path.getsize(image_path)
-                estimated_encoded_size = int(raw_size * 1.37)  # Base64 size + buffer
-                logger.info(
-                    f"Raw image size: {raw_size / 1024 / 1024:.2f}MB, \
-                    estimated encoded size: {estimated_encoded_size / 1024 / 1024:.2f}MB"
-                )
-
-                if estimated_encoded_size > 5 * 1024 * 1024:
-                    logger.info(
-                        f"Image size after base64 encoding would exceed 5MB limit \
-                        ({estimated_encoded_size} bytes), disabling screenshot"
-                    )
-                    send_screenshot = False
-                else:
-                    # Only read and prepare the image if it's likely to be within size limits
-                    image_content = handle_sending_results_to_llm(image_path)
-
-                    # Get actual bytes length (this is the important check)
-                    if (
-                        "image" in image_content
-                        and "source" in image_content["image"]
-                        and "bytes" in image_content["image"]["source"]
-                    ):
-                        actual_bytes_length = len(image_content["image"]["source"]["bytes"])
-                        logger.info(f"Actual image bytes size: {actual_bytes_length / 1024 / 1024:.2f}MB")
-                        if actual_bytes_length > 5 * 1024 * 1024:
-                            logger.info(
-                                f"Image bytes exceed 5MB limit ({actual_bytes_length} bytes), disabling screenshot"
-                            )
-                            send_screenshot = False
-                            image_content = {"text": "Image too large to display (exceeds 5MB limit)"}
+            if image_path and os.path.exists(image_path):
+                image_content = handle_sending_results_to_llm(image_path)
 
         # Clean up if needed
         should_delete = analysis_results.get("should_delete", False)
@@ -525,24 +493,11 @@ def extract_text_from_image(image_path: str, min_confidence: float = 0.5) -> Lis
 
     Returns:
         List of dictionaries with text and its coordinates
-
-    Known OCR Limitations (Important for troubleshooting):
-        - Stylized/decorative fonts may not be detected
-        - Low contrast text (e.g., light gray on white) often missed
-        - Small text (< 10px) has poor detection rate
-        - Rotated or skewed text may be missed
-        - Text embedded in images/logos usually not detected
-        - UI elements like buttons may use non-standard rendering
-
-    If OCR misses text, try:
-        1. Lowering min_confidence parameter (default 0.5)
-        2. Using send_screenshot=True to visually inspect
-        3. Clicking directly on coordinates if you know the location
     """
     # Read the image
     img = cv2.imread(image_path)
     if img is None:
-        raise ValueError(f"Could not read image at {image_path}. Ensure the file exists and is a valid image format.")
+        raise ValueError(f"Could not read image at {image_path}")
 
     # Get image dimensions for potential scaling adjustments
     img_height, img_width = img.shape[:2]
@@ -750,76 +705,9 @@ def focus_application(app_name: str, timeout: float = 2.0) -> bool:
         - macOS: Uses AppleScript's 'activate' command
         - Windows: Uses PowerShell's AppActivate method
         - Linux: Attempts to use wmctrl if available
-
-    Known Issues:
-        - App names are case-sensitive on some platforms
-        - Some apps have different internal names vs display names (e.g., "Google Chrome" vs "Chrome")
-        - Apps with multiple windows may not focus the expected window
-        - Some apps take longer to respond and may need increased timeout
     """
     system = platform.system().lower()
     start_time = time.time()
-
-    # Extended app name mappings for better reliability - includes more variations
-    app_name_mappings = {
-        # Browsers
-        "chrome": "Google Chrome",
-        "google chrome": "Google Chrome",
-        "googlechrome": "Google Chrome",
-        "safari": "Safari",
-        "firefox": "Firefox",
-        "mozilla firefox": "Firefox",
-        "edge": "Microsoft Edge",
-        "microsoft edge": "Microsoft Edge",
-        "brave": "Brave Browser",
-        "brave browser": "Brave Browser",
-        # Development
-        "vscode": "Visual Studio Code",
-        "vs code": "Visual Studio Code",
-        "code": "Visual Studio Code",
-        "visual studio code": "Visual Studio Code",
-        "xcode": "Xcode",
-        "sublime": "Sublime Text",
-        "sublime text": "Sublime Text",
-        "atom": "Atom",
-        # Communication
-        "slack": "Slack",
-        "teams": "Microsoft Teams",
-        "microsoft teams": "Microsoft Teams",
-        "zoom": "zoom.us",
-        "zoom.us": "zoom.us",
-        "discord": "Discord",
-        "skype": "Skype",
-        # Office
-        "outlook": "Microsoft Outlook",
-        "excel": "Microsoft Excel",
-        "word": "Microsoft Word",
-        "powerpoint": "Microsoft PowerPoint",
-        "pages": "Pages",
-        "numbers": "Numbers",
-        "keynote": "Keynote",
-        # System
-        "finder": "Finder",
-        "terminal": "Terminal",
-        "iterm": "iTerm",
-        "iterm2": "iTerm",
-        "console": "Console",
-        "activity monitor": "Activity Monitor",
-        # Other common apps
-        "notion": "Notion",
-        "spotify": "Spotify",
-        "music": "Music",
-        "messages": "Messages",
-        "mail": "Mail",
-        "calendar": "Calendar",
-        "notes": "Notes",
-    }
-
-    # Try to use a mapped name if available (case-insensitive lookup)
-    normalized_name = app_name_mappings.get(app_name.lower(), app_name)
-    if normalized_name != app_name:
-        logger.info(f"Using normalized app name: '{normalized_name}' for '{app_name}'")
-        app_name = normalized_name
 
     try:
         if system == "darwin":  # macOS
@@ -830,28 +718,16 @@ def focus_application(app_name: str, timeout: float = 2.0) -> bool:
             try:
                 result = subprocess.run(["osascript", "-e", script], check=True, capture_output=True, timeout=timeout)
                 if result.returncode != 0:
-                    error_output = result.stderr.decode('utf-8', errors='ignore').strip()
-                    logger.warning(f"Focus application returned non-zero exit code: {result.returncode}. Error: {error_output}")
-
-                    # Check if app exists and provide helpful suggestions
-                    if "Can't get application" in error_output or "Unable to find application" in error_output:
-                        logger.error(
-                            f"Application '{app_name}' not found. Please check:\n"
-                            f"1. Is the app name correct? Common names: 'Google Chrome', 'Safari', 'Terminal'\n"
-                            f"2. Is the app installed?\n"
-                            f"3. Try opening the app manually first\n"
-                            f"4. On macOS, use the exact name shown in Applications folder"
-                        )
+                    logger.warning(f"Focus application returned non-zero exit code: {result.returncode}")
                     return False
 
                 # Brief pause for window to focus, but respect overall timeout
                 remaining_time = timeout - (time.time() - start_time)
                 if remaining_time > 0:
-                    # Increased to 0.5s for better reliability with slow apps
-                    time.sleep(min(0.5, remaining_time))
+                    time.sleep(min(0.2, remaining_time))
                 return True
             except subprocess.TimeoutExpired:
-                logger.warning(f"Focus operation timed out after {timeout} seconds for app: {app_name}. Consider increasing focus_timeout parameter.")
+                logger.warning(f"Focus operation timed out after {timeout} seconds for app: {app_name}")
                 return False
 
         elif system == "windows":
@@ -928,29 +804,43 @@ def handle_sending_results_to_llm(image_path: str) -> dict:
     """
     Prepare the screenshot image to be sent to the LLM.
 
-    Args:
-        image_path: Path to the screenshot image
-
-    Returns:
-        Dictionary containing the image data formatted for the Converse API
+    Compression settings are configurable via environment variables:
+    - STRANDS_SCREENSHOT_MAX_DIMENSION (default: 640)
+    - STRANDS_SCREENSHOT_JPEG_QUALITY (default: 45)
+    - STRANDS_SCREENSHOT_MAX_BYTES (default: 450000)
+    - STRANDS_SCREENSHOT_CACHE_DIR (default: screenshots/cache)
     """
     try:
-        # Check if file exists
         if not os.path.exists(image_path):
             return {"text": f"Screenshot image not found at path: {image_path}"}
 
-        # Read the image file as binary data
-        with open(image_path, "rb") as file:
-            file_bytes = file.read()
+        config = load_screenshot_config()
+        with open(image_path, "rb") as handle:
+            raw_bytes = handle.read()
 
-        # Determine image format using PIL
-        with Image.open(image_path) as img:
-            image_format = img.format.lower()
-            if image_format not in ["png", "jpeg", "jpg", "gif", "webp"]:
-                image_format = "png"  # Default to PNG if format is not recognized
+        compressed_bytes, info = compress_image_bytes(raw_bytes, config)
+        cache_path = cache_image_bytes(compressed_bytes, config, prefix="use_computer")
 
-        # Return the image data in the format expected by the Converse API
-        return {"image": {"format": image_format, "source": {"bytes": file_bytes}}}
+        logger.info(
+            "Compressed screenshot to %s KB (quality=%s, max=%spx)",
+            round(info["bytes"] / 1024, 1),
+            info["quality"],
+            config.max_dimension,
+        )
+
+        if not info["fits"]:
+            note = (
+                "Screenshot cached but omitted from context "
+                f"({round(info['bytes'] / 1024, 1)} KB > {round(config.max_bytes / 1024, 1)} KB)"
+            )
+            if cache_path:
+                note = f"{note}. Cache: {cache_path}"
+            return {"text": note}
+
+        image_block = {"image": {"format": "jpeg", "source": {"bytes": compressed_bytes}}}
+        if cache_path:
+            image_block["cache_path"] = cache_path
+        return image_block
     except Exception as e:
         return {"text": f"Error preparing image for LLM: {str(e)}"}
 
@@ -972,15 +862,7 @@ def handle_analyze_screenshot_pytesseract(
     try:
         text_data = extract_text_from_image(image_path, min_confidence)
         if not text_data:
-            result = (
-                f"No text detected in screenshot {image_path}.\n"
-                f"Possible reasons:\n"
-                f"- The screen area may not contain text\n"
-                f"- Text may be in an unsupported font or too stylized\n"
-                f"- Text contrast may be too low (try adjusting min_confidence parameter, current: {min_confidence})\n"
-                f"- Text may be too small to detect reliably\n"
-                f"- Consider using send_screenshot=True to send the image for visual inspection"
-            )
+            result = f"No text detected in screenshot {image_path}"
         else:
             formatted_result = f"Detected {len(text_data)} text elements in {image_path}:\n\n"
             for idx, item in enumerate(text_data, 1):
@@ -1000,14 +882,7 @@ def handle_analyze_screenshot_pytesseract(
     except Exception as e:
         if should_delete:
             delete_screenshot(image_path)
-        error_msg = (
-            f"Error analyzing screenshot: {str(e)}\n"
-            f"Troubleshooting tips:\n"
-            f"- Ensure Tesseract OCR is installed (brew install tesseract on macOS)\n"
-            f"- Check if the screen/region is visible and not obscured\n"
-            f"- Try adjusting the min_confidence parameter (current: {min_confidence})"
-        )
-        raise RuntimeError(error_msg) from e
+        raise RuntimeError(f"Error analyzing screenshot: {str(e)}") from e
 
 
 @tool
@@ -1077,12 +952,12 @@ def use_computer(
             IMPORTANT: Only set this to True when a user EXPLICITLY asks to see the screenshot.
             Setting this parameter increases token usage significantly and may expose sensitive
             information from the user's screen. Default is False which returns only text analysis.
-            Large screenshots (>5MB) will be automatically rejected to prevent context overflow.
+            Screenshots are compressed and size-capped to reduce context usage.
             Set to True to include the actual screenshot image in the return value,
             allowing the agent to visually inspect the screen. Set to False to only
             return the text analysis results, which is more privacy-conscious and uses
-            fewer tokens. Note: Large images (>5MB) will not be sent regardless of
-            this setting to prevent exceeding model context limits.
+            fewer tokens. If the compressed image exceeds the max size, it will be
+            cached on disk and omitted from the response.
         focus_timeout (float, optional): Maximum time in seconds to wait for application focus.
             Default is 2.0 seconds. If focusing takes longer than this, the function will
             proceed with the action anyway but will issue a warning. This is especially

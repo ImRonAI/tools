@@ -1104,7 +1104,7 @@ The Mem0 Memory Tool supports three different backend configurations:
 
 | Environment Variable | Description | Default |
 |----------------------|-------------|---------|
-| SHELL_DEFAULT_TIMEOUT | Default timeout in seconds for shell commands | 900 |
+| SHELL_DEFAULT_TIMEOUT | Default timeout in seconds for shell commands | 15 |
 
 #### Slack Tool
 
@@ -1169,6 +1169,13 @@ The Mem0 Memory Tool supports three different backend configurations:
 | STRANDS_BROWSER_HEADLESS | Default headless setting for launching browsers | false |
 | STRANDS_BROWSER_WIDTH | Default width of the browser | 1280 |
 | STRANDS_BROWSER_HEIGHT | Default height of the browser | 800 |
+| STRANDS_SCREENSHOT_FORMAT | Default screenshot format (jpeg or png) | jpeg |
+| STRANDS_SCREENSHOT_MAX_DIMENSION | Max width/height for outgoing screenshots | 640 |
+| STRANDS_SCREENSHOT_JPEG_QUALITY | JPEG quality (0-100) for outgoing screenshots | 45 |
+| STRANDS_SCREENSHOT_MAX_BYTES | Max bytes for inline screenshot payloads | 450000 |
+| STRANDS_SCREENSHOT_CACHE_DIR | Cache directory for compressed screenshots | screenshots/cache |
+| STRANDS_SCREENSHOT_CACHE_TTL_SECONDS | Cache TTL in seconds | 1800 |
+| STRANDS_SCREENSHOT_CACHE_MAX_ITEMS | Max cached screenshots kept | 50 |
 
 #### RSS Tool
 

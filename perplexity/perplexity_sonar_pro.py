@@ -8,10 +8,12 @@ import aiohttp
 import json
 import logging
 from typing import Dict, Any, List, Optional
+from strands.tools import tool
 
 logger = logging.getLogger(__name__)
 
 
+@tool
 async def perplexity_sonar_pro(
     query: str,
     search_filter: Optional[str] = None,

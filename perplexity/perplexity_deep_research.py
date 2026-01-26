@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Perplexity Deep Research Tool
 Non-blocking async integration using the Sonar Deep Research model.
@@ -34,8 +36,6 @@ Agent: perplexity_deep_research(action="fetch", request_id="...")
 
 Note: Async requests have a TTL of 7 days on Perplexity's servers.
 """
-
-from __future__ import annotations
 
 import asyncio
 import logging
@@ -491,23 +491,23 @@ async def _cancel_job(request_id: str) -> Optional[ResearchJobState]:
 async def perplexity_deep_research(
     topic: str,
     depth: str = "comprehensive",
-    focus_areas: Optional[List[str]] = None,
+    focus_areas: list[str] | None = None,
     include_trials: bool = True,
     include_guidelines: bool = True,
-    search_domains: Optional[List[str]] = None,
-    time_range: Optional[str] = None,
+    search_domains: list[str] | None = None,
+    time_range: str | None = None,
     max_sources: int = 100,
     reasoning_effort: str = "medium",
     *,
     action: str = "start",
-    request_id: Optional[str] = None,
+    request_id: str | None = None,
     wait_for_completion: bool = False,
-    initial_delay_seconds: Optional[float] = None,
-    base_backoff_seconds: Optional[float] = None,
-    max_backoff_seconds: Optional[float] = None,
-    max_attempts: Optional[int] = None,
+    initial_delay_seconds: float | None = None,
+    base_backoff_seconds: float | None = None,
+    max_backoff_seconds: float | None = None,
+    max_attempts: int | None = None,
     **kwargs: Any,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Conduct deep research using Perplexity's Sonar Deep Research model.
 
     ## Async Workflow (Recommended)
@@ -831,3 +831,10 @@ async def perplexity_deep_research(
         "note": "Results typically ready in 2-5 minutes for comprehensive research",
     }
     return response_payload
+
+
+# Fix Pydantic "class-not-fully-defined" error by rebuilding the tool's model
+try:
+    perplexity_deep_research._tool_metadata.input_model.model_rebuild()
+except Exception:
+    pass  # Silently fail if already rebuilt or if structure changed
