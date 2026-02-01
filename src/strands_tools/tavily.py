@@ -57,6 +57,8 @@ from rich.panel import Panel
 from strands import tool
 
 logger = logging.getLogger(__name__)
+API_TOOL_TIMEOUT_SECONDS = int(os.getenv("API_TOOL_TIMEOUT_SECONDS", "7"))
+DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=API_TOOL_TIMEOUT_SECONDS)
 
 # Tavily API configuration
 TAVILY_API_BASE_URL = "https://api.tavily.com"
@@ -371,7 +373,7 @@ async def tavily_search(
 
         logger.info(f"Making Tavily search request for query: {query}")
 
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=DEFAULT_TIMEOUT) as session:
             async with session.post(url, json=payload, headers=headers) as response:
                 try:
                     data = await response.json()
@@ -463,7 +465,7 @@ async def tavily_extract(
         url_count = len(urls) if isinstance(urls, list) else 1
         logger.info(f"Making Tavily extract request for {url_count} URLs")
 
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=DEFAULT_TIMEOUT) as session:
             async with session.post(url, json=payload, headers=headers) as response:
                 try:
                     data = await response.json()
@@ -602,7 +604,7 @@ async def tavily_crawl(
 
         logger.info(f"Making Tavily crawl request for URL: {url}")
 
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=DEFAULT_TIMEOUT) as session:
             async with session.post(api_url, json=payload, headers=headers) as response:
                 try:
                     data = await response.json()
@@ -729,7 +731,7 @@ async def tavily_map(
 
         logger.info(f"Making Tavily map request for URL: {url}")
 
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=DEFAULT_TIMEOUT) as session:
             async with session.post(api_url, json=payload, headers=headers) as response:
                 try:
                     data = await response.json()

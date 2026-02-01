@@ -40,15 +40,37 @@ Note: Async requests have a TTL of 7 days on Perplexity's servers.
 import asyncio
 import logging
 import os
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import aiohttp
 import json
 from strands import tool
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
+API_TOOL_TIMEOUT_SECONDS = int(os.getenv("API_TOOL_TIMEOUT_SECONDS", "7"))
+
+ENV_PATH = Path(__file__).resolve().parents[3] / ".env"
+load_dotenv(ENV_PATH)
+
+
+def _read_env_value(key: str) -> Optional[str]:
+    for path in (ENV_PATH, Path.cwd() / ".env"):
+        if not path.exists():
+            continue
+        try:
+            for line in path.read_text().splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                name, value = line.split("=", 1)
+                if name.strip() == key:
+                    return value.strip().strip('"').strip("'")
+        except Exception:
+            continue
+    return None
 
 # -----------------------------------------------------------------------------
 # Job state tracking
@@ -77,30 +99,74 @@ def _safe_int(value: Optional[int | str], default: int) -> int:
         return default
 
 
-@dataclass
 class ResearchJobState:
     """Holds state for a Perplexity deep research job."""
 
     request_id: str
     topic: str
     depth: str
-    reasoning_effort: str = "medium"
-    status: str = "CREATED"
-    created_at: datetime = field(default_factory=_utcnow)
-    updated_at: datetime = field(default_factory=_utcnow)
-    report: Optional[str] = None
-    citations: Optional[List[Any]] = None
-    raw_response: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
-    attempts: int = 0
-    next_poll_in: Optional[float] = None
-    last_error: Optional[str] = None
-    polling_started_at: Optional[datetime] = None
-    initial_delay_seconds: float = 180.0
-    base_backoff_seconds: float = 60.0
-    max_backoff_seconds: float = 300.0
-    max_attempts: int = 20
-    completion_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
+    reasoning_effort: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    report: Optional[str]
+    citations: Optional[List[Any]]
+    raw_response: Optional[Dict[str, Any]]
+    error: Optional[str]
+    attempts: int
+    next_poll_in: Optional[float]
+    last_error: Optional[str]
+    polling_started_at: Optional[datetime]
+    initial_delay_seconds: float
+    base_backoff_seconds: float
+    max_backoff_seconds: float
+    max_attempts: int
+    completion_event: asyncio.Event
+
+    def __init__(
+        self,
+        *,
+        request_id: str,
+        topic: str,
+        depth: str,
+        reasoning_effort: str = "medium",
+        status: str = "CREATED",
+        created_at: Optional[datetime] = None,
+        updated_at: Optional[datetime] = None,
+        report: Optional[str] = None,
+        citations: Optional[List[Any]] = None,
+        raw_response: Optional[Dict[str, Any]] = None,
+        error: Optional[str] = None,
+        attempts: int = 0,
+        next_poll_in: Optional[float] = None,
+        last_error: Optional[str] = None,
+        polling_started_at: Optional[datetime] = None,
+        initial_delay_seconds: float = 180.0,
+        base_backoff_seconds: float = 60.0,
+        max_backoff_seconds: float = 300.0,
+        max_attempts: int = 20,
+        completion_event: Optional[asyncio.Event] = None,
+    ) -> None:
+        self.request_id = request_id
+        self.topic = topic
+        self.depth = depth
+        self.reasoning_effort = reasoning_effort
+        self.status = status
+        self.created_at = created_at or _utcnow()
+        self.updated_at = updated_at or _utcnow()
+        self.report = report
+        self.citations = citations
+        self.raw_response = raw_response
+        self.error = error
+        self.attempts = attempts
+        self.next_poll_in = next_poll_in
+        self.last_error = last_error
+        self.polling_started_at = polling_started_at
+        self.initial_delay_seconds = initial_delay_seconds
+        self.base_backoff_seconds = base_backoff_seconds
+        self.max_backoff_seconds = max_backoff_seconds
+        self.max_attempts = max_attempts
+        self.completion_event = completion_event or asyncio.Event()
 
     def to_dict(self, include_report: bool = False) -> Dict[str, Any]:
         """Serialize job state for tool responses."""
@@ -175,7 +241,7 @@ def get_pending_research_jobs() -> List[Dict[str, Any]]:
 
 
 async def await_pending_research(
-    timeout_seconds: float = 300.0,
+    timeout_seconds: float = API_TOOL_TIMEOUT_SECONDS,
     request_ids: Optional[List[str]] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """
@@ -211,6 +277,7 @@ async def await_pending_research(
     results: Dict[str, Dict[str, Any]] = {}
     
     try:
+        timeout_seconds = min(timeout_seconds, API_TOOL_TIMEOUT_SECONDS)
         # Wait for all completion events with timeout
         events = [job.completion_event.wait() for job in jobs_to_await]
         await asyncio.wait_for(
@@ -337,7 +404,8 @@ async def _poll_research_job(
         # Initial sleep requested by product: wait before first poll.
         await asyncio.sleep(job.initial_delay_seconds)
 
-        async with aiohttp.ClientSession() as session:
+        timeout = aiohttp.ClientTimeout(total=API_TOOL_TIMEOUT_SECONDS)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             while attempt < job.max_attempts:
                 attempt += 1
                 job.attempts = attempt
@@ -346,7 +414,7 @@ async def _poll_research_job(
                     async with session.get(
                         f"https://api.perplexity.ai/async/chat/completions/{request_id}",
                         headers=headers,
-                        timeout=aiohttp.ClientTimeout(total=60),
+                        timeout=timeout,
                     ) as poll_response:
                         if poll_response.status != 200:
                             text = await poll_response.text()
@@ -567,7 +635,7 @@ async def perplexity_deep_research(
         On fetch (completed): {success: True, report, citations, ...}
         On fetch (pending): {success: False, status: "POLLING", ...}
     """
-    api_key = os.getenv("PERPLEXITY_API_KEY")
+    api_key = os.getenv("PERPLEXITY_API_KEY") or _read_env_value("PERPLEXITY_API_KEY")
     if not api_key:
         return {
             "success": False,
@@ -649,11 +717,12 @@ async def perplexity_deep_research(
 
         # If job is unknown locally, attempt a direct poll once.
         try:
-            async with aiohttp.ClientSession() as session:
+            timeout = aiohttp.ClientTimeout(total=API_TOOL_TIMEOUT_SECONDS)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(
                     f"https://api.perplexity.ai/async/chat/completions/{request_id}",
                     headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=60),
+                    timeout=timeout,
                 ) as response:
                     if response.status != 200:
                         text = await response.text()
@@ -762,12 +831,13 @@ async def perplexity_deep_research(
         payload["request"]["search_domain_filter"] = search_domains
 
     try:
-        async with aiohttp.ClientSession() as session:
+        timeout = aiohttp.ClientTimeout(total=API_TOOL_TIMEOUT_SECONDS)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(
                 "https://api.perplexity.ai/async/chat/completions",
                 headers=headers,
                 json=payload,
-                timeout=aiohttp.ClientTimeout(total=60),
+                timeout=timeout,
             ) as response:
                 if response.status != 200:
                     error_text = await response.text()
@@ -812,7 +882,24 @@ async def perplexity_deep_research(
     _register_job(job_state, poll_task)
 
     if wait_for_completion:
-        await job_state.completion_event.wait()
+        try:
+            await asyncio.wait_for(
+                job_state.completion_event.wait(),
+                timeout=API_TOOL_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            response_payload = job_state.to_dict(include_report=False)
+            response_payload.update(
+                {
+                    "success": False,
+                    "status": job_state.status,
+                    "error": (
+                        f"Timed out waiting for completion after "
+                        f"{API_TOOL_TIMEOUT_SECONDS}s"
+                    ),
+                }
+            )
+            return response_payload
         include_report = job_state.status == "COMPLETED"
         return job_state.to_dict(include_report=include_report)
 

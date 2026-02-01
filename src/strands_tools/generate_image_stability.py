@@ -58,6 +58,8 @@ import os
 from typing import Any, Dict, Optional, Tuple, Union
 
 import requests
+
+API_TOOL_TIMEOUT_SECONDS = int(os.getenv("API_TOOL_TIMEOUT_SECONDS", "7"))
 from strands import tool
 
 
@@ -179,6 +181,7 @@ def call_stability_api(
         headers=headers,
         files=files,
         data=data,
+        timeout=API_TOOL_TIMEOUT_SECONDS,
     )
 
     response.raise_for_status()

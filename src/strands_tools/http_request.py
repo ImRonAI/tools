@@ -44,6 +44,19 @@ from urllib3 import Retry
 from strands_tools.utils import console_util
 from strands_tools.utils.user_input import get_user_input
 
+API_TOOL_TIMEOUT_SECONDS = int(os.getenv("API_TOOL_TIMEOUT_SECONDS", "7"))
+
+
+def _normalize_timeout(value: Any) -> Any:
+    if value is None:
+        return API_TOOL_TIMEOUT_SECONDS
+    if isinstance(value, (int, float)):
+        return min(float(value), API_TOOL_TIMEOUT_SECONDS)
+    if isinstance(value, (list, tuple)) and value:
+        normalized = tuple(min(float(part), API_TOOL_TIMEOUT_SECONDS) for part in value[:2])
+        return normalized if len(normalized) > 1 else normalized[0]
+    return API_TOOL_TIMEOUT_SECONDS
+
 TOOL_SPEC = {
     "name": "http_request",
     "description": (
@@ -753,9 +766,8 @@ def http_request(tool: ToolUse, **kwargs: Any) -> ToolResult:
         console.print(Text("Sending request...", style="blue"))
 
         # Prepare request
-        # Default timeout: 15 seconds (connect timeout, read timeout)
-        # If a server doesn't respond in 15s, it's broken - fail fast so agent can retry
-        default_timeout = (5, 15)  # (connect_timeout, read_timeout)
+        # Default timeout: fast fail for API tools (7 seconds)
+        timeout_value = _normalize_timeout(tool_input.get("timeout"))
         request_kwargs = {
             "method": method,
             "url": url,
@@ -764,7 +776,7 @@ def http_request(tool: ToolUse, **kwargs: Any) -> ToolResult:
             "auth": auth,
             "allow_redirects": tool_input.get("allow_redirects", True),
             "proxies": tool_input.get("proxies", None),
-            "timeout": tool_input.get("timeout", default_timeout),
+            "timeout": timeout_value,
         }
 
         # Set max_redirects if specified

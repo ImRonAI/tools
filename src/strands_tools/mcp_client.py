@@ -38,7 +38,20 @@ from strands.types.tools import AgentTool, ToolGenerator, ToolSpec, ToolUse
 logger = logging.getLogger(__name__)
 
 # Default timeout for MCP operations - can be overridden via environment variable
-DEFAULT_MCP_TIMEOUT = float(os.environ.get("STRANDS_MCP_TIMEOUT", "30.0"))
+API_TOOL_TIMEOUT_SECONDS = int(os.getenv("API_TOOL_TIMEOUT_SECONDS", "7"))
+DEFAULT_MCP_TIMEOUT = float(os.environ.get("STRANDS_MCP_TIMEOUT", str(API_TOOL_TIMEOUT_SECONDS)))
+DEFAULT_MCP_TIMEOUT = min(DEFAULT_MCP_TIMEOUT, API_TOOL_TIMEOUT_SECONDS)
+DEFAULT_MCP_SSE_READ_TIMEOUT = float(os.environ.get("STRANDS_MCP_SSE_READ_TIMEOUT", str(API_TOOL_TIMEOUT_SECONDS)))
+DEFAULT_MCP_SSE_READ_TIMEOUT = min(DEFAULT_MCP_SSE_READ_TIMEOUT, API_TOOL_TIMEOUT_SECONDS)
+
+
+def _cap_timeout(value: Optional[float], default: float) -> float:
+    try:
+        if value is None:
+            return default
+        return min(float(value), API_TOOL_TIMEOUT_SECONDS)
+    except (TypeError, ValueError):
+        return default
 
 
 class MCPTool(AgentTool):
@@ -305,8 +318,8 @@ def mcp_client(
         server_url: URL for SSE or streamable_http transport - can be passed directly
         arguments: Alternative to tool_args for tool arguments
         headers: HTTP headers for streamable_http transport (optional)
-        timeout: Timeout in seconds for HTTP operations in streamable_http transport (default: 30)
-        sse_read_timeout: SSE read timeout in seconds for streamable_http transport (default: 300)
+        timeout: Timeout in seconds for HTTP operations in streamable_http transport (default: 7)
+        sse_read_timeout: SSE read timeout in seconds for streamable_http transport (default: 7)
         terminate_on_close: Whether to terminate connection on close for streamable_http transport (default: True)
         auth: Authentication object for streamable_http transport (httpx.Auth compatible)
 
@@ -330,7 +343,7 @@ def mcp_client(
             transport="streamable_http",
             server_url="https://example.com/mcp",
             headers={"Authorization": "Bearer token"},
-            timeout=60
+            timeout=7
         )
 
         # Call a tool directly with parameters
@@ -393,14 +406,18 @@ def mcp_client(
                 params["headers"] = server_config["headers"]
 
             if timeout is not None:
-                params["timeout"] = timeout
+                params["timeout"] = _cap_timeout(timeout, DEFAULT_MCP_TIMEOUT)
             elif "timeout" in server_config:
-                params["timeout"] = server_config["timeout"]
+                params["timeout"] = _cap_timeout(server_config["timeout"], DEFAULT_MCP_TIMEOUT)
+            else:
+                params["timeout"] = DEFAULT_MCP_TIMEOUT
 
             if sse_read_timeout is not None:
-                params["sse_read_timeout"] = sse_read_timeout
+                params["sse_read_timeout"] = _cap_timeout(sse_read_timeout, DEFAULT_MCP_SSE_READ_TIMEOUT)
             elif "sse_read_timeout" in server_config:
-                params["sse_read_timeout"] = server_config["sse_read_timeout"]
+                params["sse_read_timeout"] = _cap_timeout(server_config["sse_read_timeout"], DEFAULT_MCP_SSE_READ_TIMEOUT)
+            else:
+                params["sse_read_timeout"] = DEFAULT_MCP_SSE_READ_TIMEOUT
 
             if terminate_on_close is not None:
                 params["terminate_on_close"] = terminate_on_close

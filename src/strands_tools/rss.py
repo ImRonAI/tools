@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_STORAGE_PATH = os.path.join(tempfile.gettempdir(), "strands_rss_feeds")
 DEFAULT_MAX_ENTRIES = int(os.environ.get("STRANDS_RSS_MAX_ENTRIES", "100"))
 DEFAULT_UPDATE_INTERVAL = int(os.environ.get("STRANDS_RSS_UPDATE_INTERVAL", "60"))  # minutes
+API_TOOL_TIMEOUT_SECONDS = int(os.getenv("API_TOOL_TIMEOUT_SECONDS", "7"))
 
 # Create HTML to text converter
 html_converter = html2text.HTML2Text()
@@ -127,12 +128,21 @@ class RSSManager:
 
         # If using basic auth, make the request with headers and auth
         if auth and auth.get("type") == "basic":
-            response = requests.get(url, headers=headers, auth=(auth.get("username", ""), auth.get("password", "")))
+            response = requests.get(
+                url,
+                headers=headers,
+                auth=(auth.get("username", ""), auth.get("password", "")),
+                timeout=API_TOOL_TIMEOUT_SECONDS,
+            )
             return feedparser.parse(response.content)
 
-        # For non-auth requests, extract User-Agent if present in headers
-        user_agent = headers.get("User-Agent")
-        return feedparser.parse(url, agent=user_agent)
+        # For non-auth requests, fetch with a fast timeout
+        response = requests.get(
+            url,
+            headers=headers or None,
+            timeout=API_TOOL_TIMEOUT_SECONDS,
+        )
+        return feedparser.parse(response.content)
 
     def update_feed(self, feed_id: str, subscriptions: Dict[str, Dict]) -> Dict:
         if feed_id not in subscriptions:

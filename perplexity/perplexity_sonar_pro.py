@@ -11,6 +11,7 @@ from typing import Dict, Any, List, Optional
 from strands.tools import tool
 
 logger = logging.getLogger(__name__)
+API_TOOL_TIMEOUT_SECONDS = int(os.getenv("API_TOOL_TIMEOUT_SECONDS", "7"))
 
 
 @tool
@@ -54,11 +55,13 @@ async def perplexity_sonar_pro(
         if search_domain_filter:
             payload["search_domain_filter"] = search_domain_filter
 
-        async with aiohttp.ClientSession() as session:
+        timeout = aiohttp.ClientTimeout(total=API_TOOL_TIMEOUT_SECONDS)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(
                 "https://api.perplexity.ai/chat/completions",
                 headers=headers,
                 json=payload,
+                timeout=timeout,
             ) as response:
                 if response.status == 200:
                     # Process streaming response

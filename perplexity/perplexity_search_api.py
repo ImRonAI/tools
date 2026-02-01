@@ -12,9 +12,12 @@ import logging
 import os
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 from urllib.parse import urlparse
+from pathlib import Path
 
 import aiohttp
 from bs4 import BeautifulSoup  # type: ignore
+from dotenv import load_dotenv
+from strands.tools import tool
 
 try:
     from perplexity import AsyncPerplexity, APIError, RateLimitError  # type: ignore
@@ -25,6 +28,26 @@ except ImportError:  # pragma: no cover - handled gracefully at runtime
 
 logger = logging.getLogger(__name__)
 
+ENV_PATH = Path(__file__).resolve().parents[3] / ".env"
+load_dotenv(ENV_PATH)
+
+
+def _read_env_value(key: str) -> Optional[str]:
+    for path in (ENV_PATH, Path.cwd() / ".env"):
+        if not path.exists():
+            continue
+        try:
+            for line in path.read_text().splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                name, value = line.split("=", 1)
+                if name.strip() == key:
+                    return value.strip().strip('"').strip("'")
+        except Exception:
+            continue
+    return None
+
 USER_AGENT = (
     "RonAI/PerplexitySearchIntegration (+https://ron-ai-web.local) "
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 "
@@ -33,7 +56,8 @@ USER_AGENT = (
 
 MAX_MEDIA_PER_RESULT = 3
 HTML_CHAR_LIMIT = 120_000
-MEDIA_FETCH_TIMEOUT = aiohttp.ClientTimeout(total=8, connect=3, sock_read=5)
+API_TOOL_TIMEOUT_SECONDS = int(os.getenv("API_TOOL_TIMEOUT_SECONDS", "7"))
+MEDIA_FETCH_TIMEOUT = aiohttp.ClientTimeout(total=API_TOOL_TIMEOUT_SECONDS)
 CONCURRENT_MEDIA_FETCHES = 5
 
 
@@ -201,6 +225,7 @@ async def _enrich_results_with_media(
 
     async with aiohttp.ClientSession(
         headers={"User-Agent": USER_AGENT},
+        timeout=MEDIA_FETCH_TIMEOUT,
     ) as session:
 
         async def fetch_for_result(result: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
@@ -233,6 +258,7 @@ async def _enrich_results_with_media(
     return images[:MAX_MEDIA_PER_RESULT * len(results)], videos[:MAX_MEDIA_PER_RESULT * len(results)]
 
 
+@tool
 async def perplexity_search_api(
     query: Optional[str] = None,
     queries: Optional[Sequence[str]] = None,
@@ -261,7 +287,7 @@ async def perplexity_search_api(
             "error": "perplexityai package not installed on backend",
         }
 
-    api_key = os.getenv("PERPLEXITY_API_KEY")
+    api_key = os.getenv("PERPLEXITY_API_KEY") or _read_env_value("PERPLEXITY_API_KEY")
     if not api_key:
         return {
             "success": False,

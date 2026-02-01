@@ -9,6 +9,7 @@ from strands import tool
 
 # Load environment variables
 load_dotenv()
+API_TOOL_TIMEOUT_SECONDS = int(os.getenv("API_TOOL_TIMEOUT_SECONDS", "7"))
 
 class FDADrugLabelingTool:
     """Tool for retrieving FDA drug labeling information."""
@@ -42,7 +43,7 @@ class FDADrugLabelingTool:
                 params['api_key'] = self.api_key
             
             # Make request to FDA API
-            response = requests.get(self.base_url, params=params)
+            response = requests.get(self.base_url, params=params, timeout=API_TOOL_TIMEOUT_SECONDS)
             response.raise_for_status()
             
             data = response.json()

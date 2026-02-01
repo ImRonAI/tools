@@ -28,7 +28,9 @@ Example:
     ... )
 """
 
-from .agent_core_code_interpreter import AgentCoreCodeInterpreter
 from .code_interpreter import CodeInterpreter
+from .electron_code_interpreter import ElectronCodeInterpreter
+from .local_code_interpreter import LocalCodeInterpreter
+from .docker_code_interpreter import DockerCodeInterpreter
 
-__all__ = ["CodeInterpreter", "AgentCoreCodeInterpreter"]
+__all__ = ["CodeInterpreter", "ElectronCodeInterpreter", "LocalCodeInterpreter", "DockerCodeInterpreter"]

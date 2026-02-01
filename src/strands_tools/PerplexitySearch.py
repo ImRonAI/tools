@@ -11,6 +11,7 @@ MAX_RESULTS_LIMIT = 20
 MAX_TOKENS_LIMIT = 1_000_000
 MAX_QUERIES_PER_REQUEST = 5
 RATE_LIMIT_PER_SECOND = 50
+API_TOOL_TIMEOUT_SECONDS = int(os.getenv("API_TOOL_TIMEOUT_SECONDS", "7"))
 
 RecencyFilter = Literal["day", "week", "month", "year"]
 
@@ -115,7 +116,8 @@ class PerplexitySearchClient:
     async def search_async(self, config: SearchConfig) -> SearchResponse:
         aiohttp = _require_aiohttp()
         async with self._semaphore:
-            async with aiohttp.ClientSession() as session:
+            timeout = aiohttp.ClientTimeout(total=API_TOOL_TIMEOUT_SECONDS)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 try:
                     async with session.post(API_URL, json=config.to_payload(), headers=self.headers) as resp:
                         if resp.status == 429:

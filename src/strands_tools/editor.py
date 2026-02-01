@@ -324,64 +324,6 @@ def editor(
         if command not in valid_commands:
             raise ValueError(f"Unknown command: {command}. Valid commands: {', '.join(valid_commands)}")
 
-        # Validate required parameters upfront for better error messages
-        if command == "create" and not file_text:
-            raise ValueError(
-                "ERROR: 'create' command requires 'file_text' parameter.\n"
-                "REQUIRED: file_text (string) - The content to write to the new file.\n"
-                "EXAMPLE: editor(command='create', path='/path/to/file.txt', file_text='Hello World')"
-            )
-
-        if command == "str_replace":
-            missing_params = []
-            if not old_str:
-                missing_params.append("old_str (string) - The exact string to find and replace")
-            if new_str is None:
-                missing_params.append("new_str (string) - The replacement string (can be empty '')")
-
-            if missing_params:
-                raise ValueError(
-                    f"ERROR: 'str_replace' command missing required parameters:\n"
-                    f"MISSING: {', '.join(missing_params)}\n"
-                    f"EXAMPLE: editor(command='str_replace', path='/file.py', old_str='foo', new_str='bar')"
-                )
-
-        if command == "pattern_replace":
-            missing_params = []
-            if not pattern:
-                missing_params.append("pattern (string) - The regex pattern to match")
-            if new_str is None:
-                missing_params.append("new_str (string) - The replacement string")
-
-            if missing_params:
-                raise ValueError(
-                    f"ERROR: 'pattern_replace' command missing required parameters:\n"
-                    f"MISSING: {', '.join(missing_params)}\n"
-                    f"EXAMPLE: editor(command='pattern_replace', path='/file.py', pattern=r'\\d+', new_str='NUM')"
-                )
-
-        if command == "insert":
-            missing_params = []
-            if insert_line is None:
-                missing_params.append("insert_line (int or string) - Line number or text to find insertion point")
-            if not new_str:
-                missing_params.append("new_str (string) - The text to insert")
-
-            if missing_params:
-                raise ValueError(
-                    f"ERROR: 'insert' command missing required parameters:\n"
-                    f"MISSING: {', '.join(missing_params)}\n"
-                    f"NOTE: Both 'insert_line' AND 'new_str' are required for insert.\n"
-                    f"EXAMPLE: editor(command='insert', path='/file.py', insert_line=10, new_str='# Comment')"
-                )
-
-        if command == "find_line" and not search_text:
-            raise ValueError(
-                "ERROR: 'find_line' command requires 'search_text' parameter.\n"
-                "REQUIRED: search_text (string) - The text to search for in the file.\n"
-                "EXAMPLE: editor(command='find_line', path='/file.py', search_text='def main')"
-            )
-
         # Get environment variables at runtime
         editor_dir_tree_max_depth = int(os.getenv("EDITOR_DIR_TREE_MAX_DEPTH", "2"))
 
@@ -399,6 +341,8 @@ def editor(
 
             # Preview specific changes for each command
             if command == "create":
+                if not file_text:
+                    raise ValueError("file_text is required for create command")
                 content = file_text
                 language = detect_language(path)
                 # Use Syntax directly for proper highlighting
@@ -414,6 +358,9 @@ def editor(
             elif command in {"str_replace", "pattern_replace"}:
                 old = old_str if command == "str_replace" else pattern
                 new = new_str
+                if not old or new is None:
+                    param_name = "old_str" if command == "str_replace" else "pattern"
+                    raise ValueError(f"Both {param_name} and new_str are required for {command} command")
                 language = detect_language(path)
 
                 # Create table grid for side-by-side display
@@ -470,6 +417,8 @@ def editor(
                 console.print(preview_panel)
                 console.print()
             elif command == "insert":
+                if not new_str or insert_line is None:
+                    raise ValueError("Both new_str and insert_line are required for insert command")
                 language = detect_language(path)
                 # Create table with syntax highlighting
                 table = Table(title="Insertion Preview", show_header=True)
@@ -552,6 +501,9 @@ def editor(
                 raise ValueError(f"Path {path} does not exist")
 
         elif command == "create":
+            if not file_text:
+                raise ValueError("file_text is required for create command")
+
             os.makedirs(os.path.dirname(path), exist_ok=True)
 
             # Write the file and cache content
@@ -563,6 +515,9 @@ def editor(
             result = f"File {path} created successfully"
 
         elif command == "str_replace":
+            if not old_str or new_str is None:
+                raise ValueError("Both old_str and new_str are required for str_replace command")
+
             # Check content history first
             content = get_last_content(path)
             if content is None:
@@ -598,6 +553,9 @@ def editor(
             )
 
         elif command == "pattern_replace":
+            if not pattern or new_str is None:
+                raise ValueError("Both pattern and new_str are required for pattern_replace command")
+
             # Validate pattern
             if not validate_pattern(pattern):
                 raise ValueError(f"Invalid regex pattern: {pattern}")
@@ -692,6 +650,9 @@ def editor(
             )
 
         elif command == "insert":
+            if not new_str or insert_line is None:
+                raise ValueError("Both new_str and insert_line are required for insert command")
+
             # Get content
             content = get_last_content(path)
             if content is None:
@@ -761,6 +722,9 @@ def editor(
             )
 
         elif command == "find_line":
+            if not search_text:
+                raise ValueError("search_text is required for find_line command")
+
             # Get content
             content = get_last_content(path)
             if content is None:

@@ -226,6 +226,8 @@ def get_provider_config(provider: str) -> dict[str, Any]:
         client_args = {"api_key": os.getenv("LITELLM_API_KEY")}
         if os.getenv("LITELLM_BASE_URL"):
             client_args["base_url"] = os.getenv("LITELLM_BASE_URL")
+        litellm_timeout = int(os.getenv("LITELLM_TIMEOUT_SECONDS", "300"))
+        litellm_stream_timeout = int(os.getenv("LITELLM_STREAM_TIMEOUT_SECONDS", "30"))
 
         return {
             "client_args": client_args,
@@ -233,6 +235,8 @@ def get_provider_config(provider: str) -> dict[str, Any]:
             "params": {
                 "max_tokens": int(os.getenv("STRANDS_MAX_TOKENS", "10000")),
                 "temperature": float(os.getenv("STRANDS_TEMPERATURE", "1")),
+                "timeout": litellm_timeout,
+                "stream_timeout": litellm_stream_timeout,
             },
         }
 
@@ -294,7 +298,7 @@ def get_provider_config(provider: str) -> dict[str, Any]:
             "client_args": {
                 "api_key": os.getenv("GOOGLE_API_KEY"),
             },
-            "model_id": os.getenv("STRANDS_MODEL_ID", "gemini-3-flash-preview"),
+            "model_id": os.getenv("STRANDS_MODEL_ID", "gemini-3-pro-preview"),
             "params": {
                 "max_output_tokens": int(os.getenv("STRANDS_MAX_TOKENS", "8192")),
                 "temperature": float(os.getenv("STRANDS_TEMPERATURE", "0.7")),
@@ -413,7 +417,7 @@ def get_provider_info(provider: str) -> dict[str, Any]:
         "google": {
             "name": "Google Gemini",
             "description": "Google's Gemini models",
-            "default_model": "gemini-3-flash-preview",
+            "default_model": "gemini-3-pro-preview",
             "env_vars": [
                 "GOOGLE_API_KEY",
                 "STRANDS_MODEL_ID",

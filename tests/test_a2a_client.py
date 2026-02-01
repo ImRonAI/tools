@@ -23,7 +23,7 @@ def test_init_custom_parameters():
 
     provider = A2AClientToolProvider(known_agent_urls=agent_urls, timeout=timeout)
 
-    assert provider.timeout == timeout
+    assert provider.timeout == min(timeout, DEFAULT_TIMEOUT)
     assert provider._known_agent_urls == agent_urls
 
 
@@ -33,14 +33,14 @@ def test_init_with_httpx_client_args():
     provider = A2AClientToolProvider(httpx_client_args=client_args)
 
     assert provider._httpx_client_args["headers"] == {"Authorization": "Bearer token"}
-    assert provider._httpx_client_args["timeout"] == 60
+    assert provider._httpx_client_args["timeout"] == DEFAULT_TIMEOUT
 
 
 def test_init_without_httpx_client_args():
     """Test initialization without httpx client args uses default timeout."""
     provider = A2AClientToolProvider(timeout=45)
 
-    assert provider._httpx_client_args == {"timeout": 45}
+    assert provider._httpx_client_args == {"timeout": DEFAULT_TIMEOUT}
 
 
 def test_init_httpx_client_args_overrides_timeout():
@@ -48,7 +48,7 @@ def test_init_httpx_client_args_overrides_timeout():
     client_args = {"timeout": 120}
     provider = A2AClientToolProvider(timeout=45, httpx_client_args=client_args)
 
-    assert provider._httpx_client_args["timeout"] == 120
+    assert provider._httpx_client_args["timeout"] == DEFAULT_TIMEOUT
 
 
 def test_tools_property():
@@ -73,7 +73,7 @@ def test_get_httpx_client_creates_new_client():
 
         result = provider._get_httpx_client()
 
-        mock_client_class.assert_called_once_with(timeout=45)
+        mock_client_class.assert_called_once_with(timeout=DEFAULT_TIMEOUT)
         assert result == mock_client
 
 
@@ -88,7 +88,7 @@ def test_get_httpx_client_uses_custom_args():
 
         result = provider._get_httpx_client()
 
-        mock_client_class.assert_called_once_with(headers={"Authorization": "Bearer token"}, timeout=120)
+        mock_client_class.assert_called_once_with(headers={"Authorization": "Bearer token"}, timeout=DEFAULT_TIMEOUT)
         assert result == mock_client
 
 

@@ -21,13 +21,14 @@ Usage Examples:
         ...     known_agent_urls=["http://secure-agent.example.com"],
         ...     httpx_client_args={
         ...         "headers": {"Authorization": "Bearer your-token-here"},
-        ...         "timeout": 300
+        ...         "timeout": 7
         ...     }
         ... )
 """
 
 import asyncio
 import logging
+import os
 from typing import Any
 from uuid import uuid4
 
@@ -37,7 +38,8 @@ from a2a.types import AgentCard, Message, Part, PushNotificationConfig, Role, Te
 from strands import tool
 from strands.types.tools import AgentTool
 
-DEFAULT_TIMEOUT = 300  # set request timeout to 5 minutes
+API_TOOL_TIMEOUT_SECONDS = int(os.getenv("API_TOOL_TIMEOUT_SECONDS", "7"))
+DEFAULT_TIMEOUT = API_TOOL_TIMEOUT_SECONDS
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +60,7 @@ class A2AClientToolProvider:
 
         Args:
             known_agent_urls: List of A2A agent URLs to use (defaults to None)
-            timeout: Timeout for HTTP operations in seconds (defaults to 300)
+            timeout: Timeout for HTTP operations in seconds (defaults to 7)
             webhook_url: Optional webhook URL for push notifications
             webhook_token: Optional authentication token for webhook notifications
             httpx_client_args: Optional dictionary of arguments to pass to httpx.AsyncClient
@@ -70,7 +72,7 @@ class A2AClientToolProvider:
                 This prevents "Event loop is closed" errors when the provider is used
                 across multiple asyncio.run() calls.
         """
-        self.timeout = timeout
+        self.timeout = min(timeout, API_TOOL_TIMEOUT_SECONDS)
         self._known_agent_urls: list[str] = known_agent_urls or []
         self._discovered_agents: dict[str, AgentCard] = {}
 
@@ -80,6 +82,12 @@ class A2AClientToolProvider:
         # Set default timeout if not provided in client args
         if "timeout" not in self._httpx_client_args:
             self._httpx_client_args["timeout"] = self.timeout
+        else:
+            timeout_value = self._httpx_client_args["timeout"]
+            if isinstance(timeout_value, (int, float)):
+                self._httpx_client_args["timeout"] = min(timeout_value, self.timeout)
+            else:
+                self._httpx_client_args["timeout"] = self.timeout
 
         self._initial_discovery_done: bool = False
 

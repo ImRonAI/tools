@@ -52,6 +52,8 @@ from rich.panel import Panel
 from strands import tool
 
 logger = logging.getLogger(__name__)
+API_TOOL_TIMEOUT_SECONDS = int(os.getenv("API_TOOL_TIMEOUT_SECONDS", "7"))
+DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=API_TOOL_TIMEOUT_SECONDS)
 
 # Exa API configuration
 EXA_API_BASE_URL = "https://api.exa.ai"
@@ -401,7 +403,7 @@ async def exa_search(
 
         logger.info(f"Making Exa search request for query: {query}")
 
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=DEFAULT_TIMEOUT) as session:
             async with session.post(url, json=payload, headers=headers) as response:
                 try:
                     data = await response.json()
@@ -546,7 +548,7 @@ async def exa_get_contents(
         url_count = len(urls)
         logger.info(f"Making Exa contents request for {url_count} URLs")
 
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=DEFAULT_TIMEOUT) as session:
             async with session.post(url, json=payload, headers=headers) as response:
                 try:
                     data = await response.json()

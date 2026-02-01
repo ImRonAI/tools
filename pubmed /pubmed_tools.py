@@ -14,6 +14,7 @@ import json
 from strands import tool
 
 logger = logging.getLogger(__name__)
+API_TOOL_TIMEOUT_SECONDS = int(os.getenv("API_TOOL_TIMEOUT_SECONDS", "7"))
 
 # Base URL for E-utilities
 EUTILS_BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
@@ -39,8 +40,9 @@ async def _make_eutils_request(endpoint: str, params: Dict[str, Any]) -> str:
     url = f"{EUTILS_BASE_URL}/{endpoint}.fcgi"
     
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, params=params) as response:
+        timeout = aiohttp.ClientTimeout(total=API_TOOL_TIMEOUT_SECONDS)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url, params=params, timeout=timeout) as response:
                 if response.status == 200:
                     return await response.text()
                 else:

@@ -15,6 +15,7 @@ from strands import tool
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+API_TOOL_TIMEOUT_SECONDS = int(os.getenv("API_TOOL_TIMEOUT_SECONDS", "7"))
 
 class FDADrugTools:
     """Comprehensive FDA drug information tools."""
@@ -30,7 +31,7 @@ class FDADrugTools:
             if self.api_key:
                 params['api_key'] = self.api_key
                 
-            response = requests.get(url, params=params)
+            response = requests.get(url, params=params, timeout=API_TOOL_TIMEOUT_SECONDS)
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:

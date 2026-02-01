@@ -84,6 +84,7 @@ from strands import tool
 from strands_tools.utils import console_util
 
 logger = logging.getLogger(__name__)
+API_TOOL_TIMEOUT_SECONDS = int(os.getenv("API_TOOL_TIMEOUT_SECONDS", "7"))
 
 console = console_util.create()
 
@@ -130,7 +131,12 @@ class BrightDataClient:
         if self.verbose:
             print(f"[Bright Data] Request: {payload['url']}")
 
-        response = requests.post(self.endpoint, headers=self.headers, data=json.dumps(payload))
+        response = requests.post(
+            self.endpoint,
+            headers=self.headers,
+            data=json.dumps(payload),
+            timeout=API_TOOL_TIMEOUT_SECONDS,
+        )
 
         if response.status_code != 200:
             raise Exception(f"Failed to scrape: {response.status_code} - {response.text}")
@@ -168,7 +174,12 @@ class BrightDataClient:
         """
         payload = {"url": url, "zone": zone or self.zone, "format": "raw", "data_format": "screenshot"}
 
-        response = requests.post(self.endpoint, headers=self.headers, data=json.dumps(payload))
+        response = requests.post(
+            self.endpoint,
+            headers=self.headers,
+            data=json.dumps(payload),
+            timeout=API_TOOL_TIMEOUT_SECONDS,
+        )
 
         if response.status_code != 200:
             raise Exception(f"Error {response.status_code}: {response.text}")
@@ -294,7 +305,7 @@ class BrightDataClient:
         source_type: str,
         url: str,
         num_of_reviews: Optional[int] = None,
-        timeout: int = 600,
+        timeout: int = API_TOOL_TIMEOUT_SECONDS,
         polling_interval: int = 1,
     ) -> Dict:
         """
@@ -310,6 +321,7 @@ class BrightDataClient:
         Returns:
             Dict: Structured data from the requested source
         """
+        timeout = min(timeout, API_TOOL_TIMEOUT_SECONDS)
         datasets = {
             "amazon_product": "gd_l7q7dkf244hwjntr0",
             "amazon_product_reviews": "gd_le8e811kzy4ggddlq",
@@ -344,6 +356,7 @@ class BrightDataClient:
             params={"dataset_id": dataset_id, "include_errors": True},
             headers=self.headers,
             json=[request_data],
+            timeout=API_TOOL_TIMEOUT_SECONDS,
         )
 
         trigger_data = trigger_response.json()
@@ -363,6 +376,7 @@ class BrightDataClient:
                     f"https://api.brightdata.com/datasets/v3/snapshot/{snapshot_id}",
                     params={"format": "json"},
                     headers=self.headers,
+                    timeout=API_TOOL_TIMEOUT_SECONDS,
                 )
 
                 snapshot_data = snapshot_response.json()
