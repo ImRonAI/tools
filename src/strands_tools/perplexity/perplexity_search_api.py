@@ -276,7 +276,6 @@ async def perplexity_search_api(
     return_images: bool = False,
     return_videos: bool = False,
     include_raw_results: bool = False,
-    model: str = "sonar",
 ) -> Dict[str, Any]:
     """
     Execute Perplexity Search API requests with optional advanced filtering and media enrichment.
@@ -330,7 +329,6 @@ async def perplexity_search_api(
 
     search_kwargs: Dict[str, Any] = {
         "query": active_query,
-        "model": model,
     }
     if max_results:
         search_kwargs["max_results"] = max_results

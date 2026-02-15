@@ -249,7 +249,7 @@ def getBoxedWarning(drugName: str) -> Dict[str, Any]:
         }
 
 @tool
-defgetDrugInteractions(drugName: str) -> Dict[str, Any]:
+def getDrugInteractions(drugName: str) -> Dict[str, Any]:
     """
     Get detailed information about drug interactions.
     """
@@ -278,7 +278,7 @@ defgetDrugInteractions(drugName: str) -> Dict[str, Any]:
         }
 
 @tool
-defgetAbuse(drugName: str) -> Dict[str, Any]:
+def getAbuse(drugName: str) -> Dict[str, Any]:
     """
     Retrieves information about the types of abuse that can occur with the drug.
     """
@@ -307,7 +307,7 @@ defgetAbuse(drugName: str) -> Dict[str, Any]:
         }
 
 @tool
-defgetAbuseTable(drugName: str) -> Dict[str, Any]:
+def getAbuseTable(drugName: str) -> Dict[str, Any]:
     """
     Retrieves tabular information about drug abuse.
     """
@@ -336,7 +336,7 @@ defgetAbuseTable(drugName: str) -> Dict[str, Any]:
         }
 
 @tool
-defgetActiveIngredient(drugName: str) -> Dict[str, Any]:
+def getActiveIngredient(drugName: str) -> Dict[str, Any]:
     """
     Retrieves a list of the active, medicinal ingredients in the drug product.
     """
@@ -365,7 +365,7 @@ defgetActiveIngredient(drugName: str) -> Dict[str, Any]:
         }
 
 @tool
-defgetAdverseReactions(drugName: str) -> Dict[str, Any]:
+def getAdverseReactions(drugName: str) -> Dict[str, Any]:
     """
     Retrieves information about undesirable effects associated with use of the drug.
     """
@@ -394,7 +394,7 @@ defgetAdverseReactions(drugName: str) -> Dict[str, Any]:
         }
 
 @tool
-defgetClinicalPharmacology(drugName: str) -> Dict[str, Any]:
+def getClinicalPharmacology(drugName: str) -> Dict[str, Any]:
     """
     Retrieves information about the clinical pharmacology and actions of the drug in humans.
     """
@@ -423,7 +423,7 @@ defgetClinicalPharmacology(drugName: str) -> Dict[str, Any]:
         }
 
 @tool
-defgetContraindications(drugName: str) -> Dict[str, Any]:
+def getContraindications(drugName: str) -> Dict[str, Any]:
     """
     Retrieves information about situations in which the drug product should not be used.
     """
@@ -452,7 +452,7 @@ defgetContraindications(drugName: str) -> Dict[str, Any]:
         }
 
 @tool
-defgetDescription(drugName: str) -> Dict[str, Any]:
+def getDescription(drugName: str) -> Dict[str, Any]:
     """
     Retrieves general information about the drug product.
     """
@@ -481,7 +481,7 @@ defgetDescription(drugName: str) -> Dict[str, Any]:
         }
 
 @tool
-defgetDosageAndAdministration(drugName: str) -> Dict[str, Any]:
+def getDosageAndAdministration(drugName: str) -> Dict[str, Any]:
     """
     Retrieves information about the drug product's dosage and administration recommendations.
     """
@@ -510,7 +510,7 @@ defgetDosageAndAdministration(drugName: str) -> Dict[str, Any]:
         }
 
 @tool
-defgetWarnings(drugName: str) -> Dict[str, Any]:
+def getWarnings(drugName: str) -> Dict[str, Any]:
     """
     Retrieves information about serious adverse reactions and potential safety hazards.
     """
@@ -539,7 +539,7 @@ defgetWarnings(drugName: str) -> Dict[str, Any]:
         }
 
 @tool
-defgetPregnancy(drugName: str) -> Dict[str, Any]:
+def getPregnancy(drugName: str) -> Dict[str, Any]:
     """
     Retrieves information about effects the drug may have on pregnant women or on a fetus.
     """
@@ -568,7 +568,7 @@ defgetPregnancy(drugName: str) -> Dict[str, Any]:
         }
 
 @tool
-defgetPediatricUse(drugName: str) -> Dict[str, Any]:
+def getPediatricUse(drugName: str) -> Dict[str, Any]:
     """
     Retrieves information about any limitations on pediatric indications and hazards.
     """
@@ -597,7 +597,7 @@ defgetPediatricUse(drugName: str) -> Dict[str, Any]:
         }
 
 @tool
-defgetGeriatricUse(drugName: str) -> Dict[str, Any]:
+def getGeriatricUse(drugName: str) -> Dict[str, Any]:
     """
     Retrieves information about any limitations on geriatric indications and hazards.
     """
@@ -626,7 +626,7 @@ defgetGeriatricUse(drugName: str) -> Dict[str, Any]:
         }
 
 @tool
-defgetIndicationsAndUsage(drugName: str) -> Dict[str, Any]:
+def getIndicationsAndUsage(drugName: str) -> Dict[str, Any]:
     """
     Retrieves a statement of each of the drug product's indications for use.
     """
@@ -655,7 +655,7 @@ defgetIndicationsAndUsage(drugName: str) -> Dict[str, Any]:
         }
 
 @tool
-defgetMechanismOfAction(drugName: str) -> Dict[str, Any]:
+def getMechanismOfAction(drugName: str) -> Dict[str, Any]:
     """
     Retrieves information about the established mechanism(s) of the drug's action in humans.
     """
@@ -684,7 +684,7 @@ defgetMechanismOfAction(drugName: str) -> Dict[str, Any]:
         }
 
 @tool
-defgetOverdosage(drugName: str) -> Dict[str, Any]:
+def getOverdosage(drugName: str) -> Dict[str, Any]:
     """
     Retrieves information about signs, symptoms, and laboratory findings of acute overdosage.
     """
@@ -713,7 +713,7 @@ defgetOverdosage(drugName: str) -> Dict[str, Any]:
         }
 
 @tool
-defgetPharmacokinetics(drugName: str) -> Dict[str, Any]:
+def getPharmacokinetics(drugName: str) -> Dict[str, Any]:
     """
     Retrieves information about the clinically significant pharmacokinetics of a drug.
     """
@@ -742,7 +742,7 @@ defgetPharmacokinetics(drugName: str) -> Dict[str, Any]:
         }
 
 @tool
-defgetControlledSubstance(drugName: str) -> Dict[str, Any]:
+def getControlledSubstance(drugName: str) -> Dict[str, Any]:
     """
     Retrieves information about the schedule in which the drug is controlled by the DEA.
     """
@@ -771,7 +771,7 @@ defgetControlledSubstance(drugName: str) -> Dict[str, Any]:
         }
 
 @tool
-defgetNursingMothers(drugName: str) -> Dict[str, Any]:
+def getNursingMothers(drugName: str) -> Dict[str, Any]:
     """
     Retrieves information about excretion of the drug in human milk and effects on nursing infant.
     """

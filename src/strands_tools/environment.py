@@ -69,7 +69,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
-from strands.types.tools import ToolResult, ToolResultContent, ToolUse
+from strands import ToolContext, tool
+from strands.types.tools import ToolResult, ToolResultContent
 
 from strands_tools.utils import console_util, user_input
 
@@ -361,7 +362,15 @@ def show_operation_result(console: Console, success: bool, message: str) -> None
         console.print(format_error_message(message))
 
 
-def environment(tool: ToolUse, **kwargs: Any) -> ToolResult:
+@tool(name="environment", description=TOOL_SPEC["description"], inputSchema=TOOL_SPEC["inputSchema"], context=True)
+def environment(
+    action: str,
+    name: Optional[str] = None,
+    value: Optional[str] = None,
+    prefix: Optional[str] = None,
+    masked: Optional[bool] = None,
+    tool_context: Optional[ToolContext] = None,
+) -> ToolResult:
     """
     Environment variable management tool for listing, getting, setting, and deleting environment variables.
 
@@ -396,13 +405,12 @@ def environment(tool: ToolUse, **kwargs: Any) -> ToolResult:
     - BYPASS_TOOL_CONSENT mode controls for testing and automation
 
     Args:
-        tool: The ToolUse object containing the action and parameters
-            tool["input"]["action"]: The action to perform (required)
-            tool["input"]["name"]: Environment variable name (for get/set/delete/validate)
-            tool["input"]["value"]: Value to set (for set action)
-            tool["input"]["prefix"]: Filter prefix for list action
-            tool["input"]["masked"]: Whether to mask sensitive values (default: True)
-        **kwargs: Additional keyword arguments (unused)
+        action: The action to perform (list, get, set, delete, validate)
+        name: Environment variable name (for get/set/delete/validate)
+        value: Value to set (for set action)
+        prefix: Filter prefix for list action
+        masked: Whether to mask sensitive values in output (defaults from ENV_VARS_MASKED_DEFAULT)
+        tool_context: Strands tool context containing tool invocation metadata
 
     Returns:
         ToolResult: Dictionary containing:
@@ -419,15 +427,24 @@ def environment(tool: ToolUse, **kwargs: Any) -> ToolResult:
     console = console_util.create()
 
     # Default return in case of unexpected code path
-    tool_use_id = tool["toolUseId"]
+    tool_use_id = (
+        tool_context.tool_use["toolUseId"]
+        if tool_context and "toolUseId" in tool_context.tool_use
+        else "environment-local"
+    )
     default_content: List[ToolResultContent] = [{"text": "Unknown error in environment tool"}]
     default_result = {
         "toolUseId": tool_use_id,
         "status": "error",
         "content": default_content,
     }
-    tool_use_id = tool["toolUseId"]
-    tool_input = tool["input"]
+    tool_input: Dict[str, Any] = {
+        "action": action,
+        "name": name,
+        "value": value,
+        "prefix": prefix,
+        "masked": masked,
+    }
 
     # Get environment variables at runtime
     env_vars_masked_default = os.getenv("ENV_VARS_MASKED_DEFAULT", "true").lower() == "true"
@@ -437,14 +454,15 @@ def environment(tool: ToolUse, **kwargs: Any) -> ToolResult:
 
     # Actions that need confirmation
     dangerous_actions = {"set", "delete"}
-    needs_confirmation = tool_input["action"] in dangerous_actions and not strands_dev
+    requested_action = str(tool_input["action"]).strip().lower()
+    needs_confirmation = requested_action in dangerous_actions and not strands_dev
 
     # Print BYPASS_TOOL_CONSENT mode status for debugging
     if strands_dev:
         console.print("[bold green]Running in BYPASS_TOOL_CONSENT mode - confirmation bypassed[/bold green]")
 
     try:
-        action = tool_input["action"]
+        action = requested_action
 
         # Action processing starts here
 
@@ -481,11 +499,10 @@ def environment(tool: ToolUse, **kwargs: Any) -> ToolResult:
             }
 
         elif action == "get":
-            if "name" not in tool_input:
+            if not name:
                 console.print(format_error_message("name parameter is required"))
                 raise ValueError("name parameter is required for get action")
 
-            name = tool_input["name"]
             value = os.getenv(name)
 
             if value is None:
@@ -545,13 +562,10 @@ def environment(tool: ToolUse, **kwargs: Any) -> ToolResult:
             }
 
         elif action == "set":
-            if "name" not in tool_input or "value" not in tool_input:
+            if not name or value is None:
                 error_msg = "name and value parameters are required"
                 console.print(format_error_message(error_msg))
                 raise ValueError(error_msg)
-
-            name = tool_input["name"]
-            value = tool_input["value"]
 
             # Check protected status first, regardless of confirmation mode
             if name in PROTECTED_VARS:
@@ -629,10 +643,9 @@ def environment(tool: ToolUse, **kwargs: Any) -> ToolResult:
                 "content": set_content,
             }
         elif action == "validate":
-            if "name" not in tool_input:
+            if not name:
                 raise ValueError("name parameter is required for validate action")
 
-            name = tool_input["name"]
             value = os.getenv(name)
 
             if value is None:
@@ -655,12 +668,10 @@ def environment(tool: ToolUse, **kwargs: Any) -> ToolResult:
             }
 
         elif action == "delete":
-            if "name" not in tool_input:
+            if not name:
                 error_msg = "name parameter is required for delete action"
                 console.print(format_error_message(error_msg))
                 raise ValueError(error_msg)
-
-            name = tool_input["name"]
 
             # Check protected status first
             if name in PROTECTED_VARS:
@@ -751,6 +762,15 @@ def environment(tool: ToolUse, **kwargs: Any) -> ToolResult:
                 "status": "success",
                 "content": delete_content,
             }
+
+        unsupported_action_content: List[ToolResultContent] = [
+            {"text": f"Unsupported action: {action}. Use one of list|get|set|delete|validate."}
+        ]
+        return {
+            "toolUseId": tool_use_id,
+            "status": "error",
+            "content": unsupported_action_content,
+        }
 
     except Exception as e:
         exception_content: List[ToolResultContent] = [{"text": f"Environment tool error: {str(e)}"}]

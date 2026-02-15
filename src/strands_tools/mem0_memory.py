@@ -701,21 +701,20 @@ def mem0_memory(
         - MUST be the same value every time this agent runs
         - Use this to store the agent's own knowledge or context
 
-    WHEN TO USE WHICH:
-    - Storing user preferences/info → user_id="<actual_user_identifier>"
-    - Storing agent's learned context → agent_id="<your_agent_name>"
-    - NEVER use generic values like "test_user" or "agent1" in production
+    REQUIRED: Always provide BOTH user_id AND agent_id on every call.
+    This scopes memories to the correct user while keeping all agent types
+    (SuperAgent, Search Agent, Task Agent) unified under the same agent identity.
 
     IMPORTANT ID REQUIREMENTS:
-    - store, list, retrieve actions: MUST provide either user_id OR agent_id (not both)
+    - store, list, retrieve actions: MUST provide both user_id AND agent_id
     - get, delete, history actions: MUST provide memory_id
     - IDs are arbitrary strings but MUST be consistent across sessions
 
     COMMON USAGE PATTERNS:
-    1. Store user preference: action='store', content='User prefers dark mode', user_id='<actual_user_id>'
-    2. Store agent learning: action='store', content='User asked about Python', agent_id='<your_agent_name>'
-    3. List user memories: action='list', user_id='<actual_user_id>'
-    4. Search agent memories: action='retrieve', query='previous interactions', agent_id='<your_agent_name>'
+    1. Store user preference: action='store', content='User prefers dark mode', agent_id='ron', user_id='<actual_user_id>'
+    2. Store agent learning: action='store', content='User asked about Python', agent_id='ron', user_id='<actual_user_id>'
+    3. List memories: action='list', agent_id='ron', user_id='<actual_user_id>'
+    4. Search memories: action='retrieve', query='previous interactions', agent_id='ron', user_id='<actual_user_id>'
     5. Delete specific memory: action='delete', memory_id='mem_123'
 
     Args:

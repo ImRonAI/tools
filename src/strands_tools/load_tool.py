@@ -29,6 +29,7 @@ Tool files can be defined using the new, more concise @tool decorator pattern:
 ```python
 # cwd()/tools/my_custom_tool.py
 from strands import tool
+from strands_tools.tool_catalog_manager import get_tool_catalog_manager
 
 @tool
 def my_custom_tool(param1: str) -> str:
@@ -55,6 +56,7 @@ from os.path import expanduser
 from typing import Any, Dict
 
 from strands import tool
+from strands_tools.tool_catalog_manager import get_tool_catalog_manager
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -200,18 +202,68 @@ def load_tool(path: str, name: str, agent=None) -> Dict[str, Any]:
         # Load the tool using the agent's tool registry
         current_agent.tool_registry.load_tool_from_filepath(tool_name=name, tool_path=path)
 
-        # Return success message with tool details
+        # Update tool catalog after successful load
+        try:
+            catalog = get_tool_catalog_manager()
+            tool_obj = None
+            if current_agent and hasattr(current_agent, "tool_registry"):
+                registry = getattr(current_agent.tool_registry, "registry", None)
+                if isinstance(registry, dict):
+                    tool_obj = registry.get(name)
+            if tool_obj is not None:
+                load_pathway = f"load_tool(path='{path}', name='{name}')"
+                catalog.register_tool(
+                    tool_obj,
+                    origin="dynamically_loaded",
+                    category="dynamically_loaded",
+                    load_pathway=load_pathway,
+                )
+            else:
+                catalog.register_entry(
+                    name=name,
+                    description=f"Dynamically loaded tool from {path}",
+                    input_schema={},
+                    origin="dynamically_loaded",
+                    category="dynamically_loaded",
+                    path=path,
+                    load_pathway=f"load_tool(path='{path}', name='{name}')",
+                    execute_pathway=f"tool_execute(name='{name}', arguments={{...}})" if name else None,
+                    unload_pathway=f"unload_tool(name='{name}')" if name else None,
+                )
+        except Exception as exc:
+            logger.debug("Tool catalog update failed for load_tool: %s", exc)
+
+        # Return catalog overview first, then success message
         message = f"✅ Tool '{name}' loaded successfully from {path}"
-        return {"status": "success", "content": [{"text": message}]}
+        catalog_payload = None
+        try:
+            catalog_payload = get_tool_catalog_manager().build_catalog_overview()
+        except Exception as exc:
+            logger.debug("Failed to build catalog overview: %s", exc)
+
+        content = []
+        if catalog_payload:
+            content.append({"json": catalog_payload})
+        content.append({"text": message})
+        return {"status": "success", "content": content}
 
     except Exception as e:
         # Capture full traceback
         error_tb = traceback.format_exc()
         error_message = f"❌ Failed to load tool: {str(e)}"
         logger.error(error_message)
+        catalog_payload = None
+        try:
+            catalog_payload = get_tool_catalog_manager().build_catalog_overview()
+        except Exception:
+            pass
+        content = []
+        if catalog_payload:
+            content.append({"json": catalog_payload})
         return {
             "status": "error",
-            "content": [
+            "content": content
+            + [
                 {"text": f"❌ {error_message}\n\nTraceback:\n{error_tb}"},
                 {"text": f"📥 Input parameters: Name: {name}, Path: {path}"},
             ],

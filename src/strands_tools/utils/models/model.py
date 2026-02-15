@@ -174,7 +174,13 @@ def create_model(provider: str = None, config: dict[str, Any] = None) -> Model:
         return OpenAIModel(**config)
 
     elif provider == "google":
-        from strands.models.gemini import GeminiModel
+        try:
+            from strands.models.gemini import GeminiModel
+        except ImportError as e:
+            raise ImportError(
+                "Failed to import GeminiModel for provider 'google'. "
+                "Install the missing dependency with: pip install google-genai"
+            ) from e
 
         return GeminiModel(**config)
 

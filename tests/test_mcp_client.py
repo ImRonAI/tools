@@ -496,6 +496,86 @@ class TestMCPClientListTools:
         assert "Server error" in result["content"][0]["text"]
 
 
+class TestMCPClientResources:
+    """Test listing/reading resources functionality."""
+
+    def test_list_resources_success(self, mock_mcp_client, mock_stdio_client):
+        """Test listing resources from a connected server."""
+        # Connect first
+        mcp_client(
+            action="connect", connection_id="test_server", transport="stdio", command="python", args=["server.py"]
+        )
+
+        # Mock resources list response (pydantic model in real SDK)
+        _, mock_instance = mock_mcp_client
+        mock_resources_result = MagicMock()
+        mock_resources_result.model_dump.return_value = {
+            "resources": [{"uri": "skill:///overview", "name": "Overview", "mimeType": "text/markdown"}]
+        }
+        mock_instance.list_resources_sync.return_value = mock_resources_result
+
+        result = mcp_client(action="list_resources", connection_id="test_server")
+
+        assert result["status"] == "success"
+        assert "Listed resources for MCP server 'test_server'" in result["content"][0]["text"]
+        assert result["content"][1]["json"]["resources"][0]["uri"] == "skill:///overview"
+        mock_instance.list_resources_sync.assert_called_once_with(pagination_token=None)
+
+    def test_list_resource_templates_success(self, mock_mcp_client, mock_stdio_client):
+        """Test listing resource templates from a connected server."""
+        # Connect first
+        mcp_client(
+            action="connect", connection_id="test_server", transport="stdio", command="python", args=["server.py"]
+        )
+
+        _, mock_instance = mock_mcp_client
+        mock_templates_result = MagicMock()
+        mock_templates_result.model_dump.return_value = {
+            "resourceTemplates": [{"name": "skill", "uriTemplate": "skill:///{id}"}]
+        }
+        mock_instance.list_resource_templates_sync.return_value = mock_templates_result
+
+        result = mcp_client(action="list_resource_templates", connection_id="test_server")
+
+        assert result["status"] == "success"
+        assert "Listed resource templates for MCP server 'test_server'" in result["content"][0]["text"]
+        assert result["content"][1]["json"]["resourceTemplates"][0]["name"] == "skill"
+        mock_instance.list_resource_templates_sync.assert_called_once_with(pagination_token=None)
+
+    def test_read_resource_success(self, mock_mcp_client, mock_stdio_client):
+        """Test reading a resource from a connected server."""
+        # Connect first
+        mcp_client(
+            action="connect", connection_id="test_server", transport="stdio", command="python", args=["server.py"]
+        )
+
+        _, mock_instance = mock_mcp_client
+        mock_read_result = MagicMock()
+        mock_read_result.model_dump.return_value = {
+            "contents": [{"uri": "skill:///overview", "mimeType": "text/markdown", "text": "# Overview"}]
+        }
+        mock_instance.read_resource_sync.return_value = mock_read_result
+
+        result = mcp_client(action="read_resource", connection_id="test_server", resource_uri="skill:///overview")
+
+        assert result["status"] == "success"
+        assert "Read resource 'skill:///overview' from MCP server 'test_server'" in result["content"][0]["text"]
+        assert result["content"][1]["json"]["contents"][0]["uri"] == "skill:///overview"
+        mock_instance.read_resource_sync.assert_called_once_with("skill:///overview")
+
+    def test_read_resource_missing_uri(self, mock_mcp_client, mock_stdio_client):
+        """Test read_resource without resource_uri."""
+        # Connect first
+        mcp_client(
+            action="connect", connection_id="test_server", transport="stdio", command="python", args=["server.py"]
+        )
+
+        result = mcp_client(action="read_resource", connection_id="test_server")
+
+        assert result["status"] == "error"
+        assert "resource_uri is required for read_resource action" in result["content"][0]["text"]
+
+
 class TestMCPClientCallTool:
     """Test calling tools functionality."""
 

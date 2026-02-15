@@ -172,6 +172,8 @@ class Browser(ABC):
             return await self.network_intercept(action)
         elif isinstance(action, ExecuteCdpAction):
             return await self.execute_cdp(action)
+        elif isinstance(action, PressKeyAction):
+            return await self.press_key(action)
         elif isinstance(action, CloseAction):
             return await self.close(action)
         else:
@@ -321,6 +323,10 @@ class Browser(ABC):
         if self._sessions:
             return next(iter(self._sessions.keys()))
         return None
+
+    def has_session(self, session_name: str) -> bool:
+        """Check if a session exists by name."""
+        return session_name in self._sessions
 
     def resolve_session_name(self, session_name: Optional[str]) -> str:
         """Resolve session name, using default if not provided."""

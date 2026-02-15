@@ -37,6 +37,7 @@ from a2a.client import A2ACardResolver, ClientConfig, ClientFactory
 from a2a.types import AgentCard, Message, Part, PushNotificationConfig, Role, TextPart
 from strands import tool
 from strands.types.tools import AgentTool
+from strands_tools.tool_catalog_manager import get_tool_catalog_manager
 
 API_TOOL_TIMEOUT_SECONDS = int(os.getenv("API_TOOL_TIMEOUT_SECONDS", "7"))
 DEFAULT_TIMEOUT = API_TOOL_TIMEOUT_SECONDS
@@ -100,6 +101,13 @@ class A2AClientToolProvider:
             self._push_config = PushNotificationConfig(
                 id=f"strands-webhook-{uuid4().hex[:8]}", url=self._webhook_url, token=self._webhook_token
             )
+
+        # Register tools in the catalog on instantiation
+        try:
+            catalog = get_tool_catalog_manager()
+            catalog.register_tools(self.tools, origin="built-in", category="built_in")
+        except Exception as exc:
+            logger.debug("Tool catalog update failed for A2AClientToolProvider: %s", exc)
 
     @property
     def tools(self) -> list[AgentTool]:

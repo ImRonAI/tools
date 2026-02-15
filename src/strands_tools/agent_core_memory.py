@@ -56,6 +56,7 @@ from boto3.session import Session as Boto3Session
 from botocore.config import Config as BotocoreConfig
 from strands import tool
 from strands.types.tools import AgentTool
+from strands_tools.tool_catalog_manager import get_tool_catalog_manager
 
 
 # Define memory actions as an Enum
@@ -163,6 +164,13 @@ class AgentCoreMemoryToolProvider:
                 region_name=self.region,
                 config=self.client_config,
             )
+
+        # Register tools in the catalog on instantiation
+        try:
+            catalog = get_tool_catalog_manager()
+            catalog.register_tools(self.tools, origin="built-in", category="built_in")
+        except Exception as exc:
+            logger.debug("Tool catalog update failed for AgentCoreMemoryToolProvider: %s", exc)
 
     @property
     def tools(self) -> list[AgentTool]:
