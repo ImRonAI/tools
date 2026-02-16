@@ -190,6 +190,11 @@ def file_write(tool: ToolUse, **kwargs: Any) -> ToolResult:
     tool_use_id = tool["toolUseId"]
     tool_input = tool["input"]
     path = expanduser(tool_input["path"])
+    # Root relative paths in the agent sandbox when configured
+    if not os.path.isabs(path):
+        sandbox = os.environ.get("RON_AGENT_SANDBOX_ROOT")
+        if sandbox:
+            path = os.path.join(sandbox, path)
     content = tool_input["content"]
 
     strands_dev = os.environ.get("BYPASS_TOOL_CONSENT", "").lower() == "true"

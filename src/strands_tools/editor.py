@@ -315,6 +315,11 @@ def editor(
 
     try:
         path = os.path.expanduser(path)
+        # Root relative paths in the agent sandbox when configured
+        if not os.path.isabs(path):
+            sandbox = os.environ.get("RON_AGENT_SANDBOX_ROOT")
+            if sandbox:
+                path = os.path.join(sandbox, path)
 
         if not command:
             raise ValueError("Command is required")

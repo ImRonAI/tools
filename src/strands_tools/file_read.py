@@ -229,7 +229,11 @@ def split_path_list(path: str) -> List[str]:
         List[str]: List of expanded paths
     """
     paths = [p.strip() for p in path.split(",") if p.strip()]
-    return [expanduser(p) for p in paths]
+    expanded = [expanduser(p) for p in paths]
+    sandbox = os.environ.get("RON_AGENT_SANDBOX_ROOT")
+    if sandbox:
+        expanded = [p if os.path.isabs(p) else os.path.join(sandbox, p) for p in expanded]
+    return expanded
 
 
 TOOL_SPEC = {

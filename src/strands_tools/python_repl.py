@@ -132,7 +132,9 @@ class ReplState:
                 logger.warning(f"Invalid path set : {e}. Using default path")
                 self.persistence_dir = os.path.join(Path.cwd(), "repl_state")
         else:
-            self.persistence_dir = os.path.join(Path.cwd(), "repl_state")
+            sandbox = os.environ.get("RON_AGENT_SANDBOX_ROOT")
+            base = Path(sandbox) if sandbox else Path.cwd()
+            self.persistence_dir = os.path.join(base, "repl_state")
         os.makedirs(self.persistence_dir, exist_ok=True)
         self.state_file = os.path.join(self.persistence_dir, "repl_state.pkl")
         self.load_state()
@@ -692,7 +694,9 @@ def python_repl(
         )
 
         # Log error with details
-        errors_dir = os.path.join(Path.cwd(), "errors")
+        sandbox = os.environ.get("RON_AGENT_SANDBOX_ROOT")
+        errors_base = Path(sandbox) if sandbox else Path.cwd()
+        errors_dir = os.path.join(errors_base, "errors")
         os.makedirs(errors_dir, exist_ok=True)
         error_file = os.path.join(errors_dir, "errors.txt")
 

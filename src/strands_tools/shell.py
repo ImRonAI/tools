@@ -508,7 +508,7 @@ def shell(
     if timeout is None:
         timeout = int(os.environ.get("SHELL_DEFAULT_TIMEOUT", "15"))
     if work_dir is None:
-        work_dir = os.getcwd()
+        work_dir = os.environ.get("RON_AGENT_SANDBOX_ROOT", os.getcwd())
 
     # Development mode check
     STRANDS_BYPASS_TOOL_CONSENT = os.environ.get("BYPASS_TOOL_CONSENT", "").lower() == "true"

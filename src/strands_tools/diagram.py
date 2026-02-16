@@ -1053,7 +1053,9 @@ def save_diagram_to_directory(title: str, extension: str, content: str = None) -
     Returns:
         Full path to the saved file
     """
-    diagrams_dir = os.path.join(os.getcwd(), "diagrams")
+    sandbox = os.environ.get("RON_AGENT_SANDBOX_ROOT")
+    diagrams_base = sandbox if sandbox else os.getcwd()
+    diagrams_dir = os.path.join(diagrams_base, "diagrams")
     os.makedirs(diagrams_dir, exist_ok=True)
 
     # Ensure extension starts with dot

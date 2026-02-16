@@ -45,6 +45,7 @@ See the journal function docstring for more details on available actions and par
 """
 
 from datetime import datetime
+import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -69,7 +70,9 @@ def ensure_journal_dir() -> Path:
     Returns:
         Path: The path to the journal directory
     """
-    journal_dir = Path.cwd() / "journal"
+    sandbox = os.environ.get("RON_AGENT_SANDBOX_ROOT")
+    base = Path(sandbox) if sandbox else Path.cwd()
+    journal_dir = base / "journal"
     journal_dir.mkdir(parents=True, exist_ok=True)
     return journal_dir
 
